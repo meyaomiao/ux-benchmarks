@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://postgres:password@localhost:5432/ux_benchmarks"
     redis_url: str = "redis://localhost:6379/0"
     anthropic_api_key: str = ""
+    # Optional override for a self-hosted / proxy Anthropic-compatible endpoint.
+    # Empty => the SDK default (api.anthropic.com). Set e.g. to a relay base URL.
+    anthropic_base_url: str = ""
     assets_dir: Path = Path("/app/assets")
     secret_key: str = "dev-secret"
     debug: bool = False

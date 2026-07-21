@@ -64,6 +64,13 @@ EVIDENCE_DIRECTNESS_SCORE = {
 # state_match — a candidate that shows the wrong state should not pass.
 EXCLUSION_PENALTY = 0.25
 
+# Text-only ceiling: a source with no screenshot can PASS (a precise, reproducible
+# help/procedural doc is legitimately strong evidence for the text channel), but
+# its overall score is capped below what a real screenshot could reach. This keeps
+# the honest hierarchy screenshot(observed) > described-in-text, per
+# docs/theory-grounding.md (evidence directness), while not throwing away good docs.
+TEXT_ONLY_CEILING = 0.85
+
 # Tokens that signal a current UI generation rather than a stale one.
 RECENCY_TOKENS = {
     "latest", "newest", "current", "new", "today", "recently", "redesign",
@@ -230,6 +237,11 @@ class RelevanceScorer:
                 )
 
         overall = _combine(rubric)
+        # Text-only sources are capped below what a screenshot could reach, so
+        # the screenshot > text-description hierarchy stays honest — but a good
+        # procedural doc can still clear the floor.
+        if not has_image:
+            overall = min(overall, TEXT_ONLY_CEILING)
         return Score(
             candidate_id=candidate.candidate_id,
             score=overall,
@@ -256,28 +268,73 @@ class RelevanceScorer:
     ) -> tuple[RubricBreakdown, str]:
         import anthropic  # lazy: only needed on the real path
 
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        # base_url override lets us point at a self-hosted / proxy
+        # Anthropic-compatible endpoint; empty => SDK default (api.anthropic.com).
+        client_kwargs = {"api_key": settings.anthropic_api_key}
+        if settings.anthropic_base_url:
+            client_kwargs["base_url"] = settings.anthropic_base_url
+        client = anthropic.Anthropic(**client_kwargs)
+
+        has_image = bool(candidate.image_path)
+
+        # Dual-mode rubric. Evidence quality is judged relative to the BEST
+        # evidence this source type can yield, not against an absolute "must be
+        # pixels" bar:
+        #   - image mode: strict — does it SHOW the target UI/state?
+        #   - text mode:  does it PRECISELY, REPRODUCIBLY describe the target
+        #     UI/flow (concrete controls, steps, states) vs vague marketing?
+        # A text-only score is capped by TEXT_ONLY_CEILING downstream, so a good
+        # procedural doc can pass while a screenshot of equal quality still ranks
+        # higher — the directness hierarchy stays honest.
+        if has_image:
+            mode_line = (
+                "You grade whether a SCREENSHOT SHOWS the target UI/state described "
+                "by the intent, not merely resembles the product. Score 0.0-1.0."
+            )
+            state_line = (
+                "- state_match: the screenshot visually shows the target page/state "
+                "(the actual controls/layout), not an unrelated screen"
+            )
+            fidelity_line = (
+                "- fidelity: resolution/clarity good enough to be a benchmark asset"
+            )
+        else:
+            mode_line = (
+                "You are grading a TEXT-ONLY artifact (no screenshot available). Do "
+                "NOT penalise it merely for lacking an image. Instead judge whether "
+                "it PRECISELY and REPRODUCIBLY describes the target UI/flow — naming "
+                "concrete controls, steps, and states so a designer could picture or "
+                "reproduce the screen — as opposed to vague marketing copy. Score 0.0-1.0."
+            )
+            state_line = (
+                "- state_match: how concretely/reproducibly the text describes the "
+                "target UI/flow (specific controls, steps, states) — high for a "
+                "step-by-step doc, low for vague feature mentions"
+            )
+            fidelity_line = (
+                "- fidelity: how usable this description is as a benchmark reference "
+                "(specific and detailed = high; generic = low)"
+            )
 
         instructions = (
-            "You grade whether an artifact SHOWS the target UI/state described "
-            "by the intent, not merely MENTIONS the feature. Score each rubric "
-            "dimension from 0.0 to 1.0.\n\n"
+            f"{mode_line}\n\n"
             f"INTENT: {intent_definition}\n"
             f"INCLUSION CRITERIA: {inclusion_criteria or '(none)'}\n"
             f"EXCLUSION CRITERIA: {exclusion_criteria or '(none)'}\n\n"
             "Rubric dimensions:\n"
-            "- state_match: artifact shows the target page/state (not just names it)\n"
+            f"{state_line}\n"
             "- product_match: it is the target product, not a competitor/generic\n"
             "- version_recency: current UI generation vs stale\n"
-            "- evidence_directness: observed UI vs merely claimed\n"
-            "- fidelity: resolution/clarity good enough to be a benchmark asset\n\n"
+            "- evidence_directness: how direct the evidence is (shown/observed high, "
+            "described moderate, merely claimed low)\n"
+            f"{fidelity_line}\n\n"
             "Respond with ONLY a JSON object with keys state_match, "
             "product_match, version_recency, evidence_directness, fidelity, "
             "reasoning."
         )
 
         content: list[dict] = []
-        if candidate.image_path:
+        if has_image:
             import base64
 
             with open(candidate.image_path, "rb") as fh:
@@ -296,7 +353,7 @@ class RelevanceScorer:
             text = " ".join(
                 p for p in (candidate.title, candidate.snippet, candidate.text_content) if p
             )
-            instructions += f"\n\nARTIFACT TEXT (no screenshot available):\n{text}"
+            instructions += f"\n\nARTIFACT TEXT:\n{text}"
 
         content.append({"type": "text", "text": instructions})
 
