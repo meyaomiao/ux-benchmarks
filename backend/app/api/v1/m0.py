@@ -78,7 +78,7 @@ async def create_lexicon_entry(data: LexiconEntryCreate, db: Session = Depends(g
 async def get_lexicon_entry(entry_id: UUID, db: Session = Depends(get_db)):
     entry = lexicon_service.get_lexicon_entry(db, entry_id)
     if not entry:
-        raise HTTPException(status_code=404, detail="Lexicon entry not found")
+        raise AppError("NOT_FOUND", f"Lexicon entry {entry_id} not found", 404)
     return entry
 
 

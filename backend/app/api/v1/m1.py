@@ -52,6 +52,10 @@ async def update_cell_endpoint(
 
 @router.get("/cells/{cell_id}/changelog", response_model=list[CellChangelogRead])
 async def get_cell_changelog_endpoint(cell_id: UUID, db: Session = Depends(get_db)):
+    # Guard: return 404 if the cell itself doesn't exist, so callers can
+    # distinguish "cell not found" from "cell has no changelog entries yet".
+    if not get_cell(db, cell_id):
+        raise AppError("NOT_FOUND", f"Cell {cell_id} not found", 404)
     return get_cell_changelog(db, cell_id)
 
 

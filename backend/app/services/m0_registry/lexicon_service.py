@@ -43,7 +43,9 @@ def get_lexicon_entry(db: Session, entry_id: UUID) -> DomainLexicon | None:
 
 def create_lexicon_entry(db: Session, data: LexiconEntryCreate) -> DomainLexicon:
     """Create a new lexicon entry."""
-    entry = DomainLexicon(**data.model_dump())
+    # exclude_none=True: let server_default ('[]'::jsonb) apply for
+    # omitted valid_for_competitors instead of writing NULL.
+    entry = DomainLexicon(**data.model_dump(exclude_none=True))
     db.add(entry)
     db.commit()
     db.refresh(entry)

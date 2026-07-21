@@ -54,7 +54,9 @@ def create_competitor(db: Session, data: CompetitorCreate) -> CompetitorEntity:
             409,
         )
 
-    competitor = CompetitorEntity(**data.model_dump())
+    # exclude_none=True: let server_default (e.g. '[]'::jsonb) apply for
+    # omitted JSONB array fields instead of explicitly writing NULL.
+    competitor = CompetitorEntity(**data.model_dump(exclude_none=True))
     db.add(competitor)
     db.commit()
     db.refresh(competitor)

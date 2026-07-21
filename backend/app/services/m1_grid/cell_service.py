@@ -1,4 +1,5 @@
 import re
+import hashlib
 from uuid import UUID
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func
@@ -8,8 +9,19 @@ from app.core.errors import AppError
 
 
 def _auto_key(jtbd: str, journey_stage: str, page_state: str) -> str:
+    """Generate a slug key from the three cell coordinates.
+
+    ASCII input  → readable slug, e.g. "invite-collaborators.first-setup.perm-editor"
+    CJK / mixed  → sha1-based short hash suffix to avoid empty/colliding slugs,
+                   e.g. "cell-a1b2c3d4.first-setup.perm-editor"
+    """
     def slug(s: str) -> str:
-        return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+        result = re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+        if not result:
+            # Fallback: 8-char hash of original string
+            result = "cell-" + hashlib.sha1(s.encode()).hexdigest()[:8]
+        return result
+
     return f"{slug(jtbd)}.{slug(journey_stage)}.{slug(page_state)}"
 
 
