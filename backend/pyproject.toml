@@ -35,6 +35,12 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# Package name (ux-benchmarks-backend) differs from the import dir (app/),
+# so tell hatchling exactly what to include or `pip install -e` fails to
+# locate the package.
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
