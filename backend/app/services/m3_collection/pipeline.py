@@ -1,19 +1,20 @@
-"""End-to-end probe pipeline: queries -> adapter -> scorer -> shortlist.
+"""End-to-end probe pipeline: queries -> adapters -> scorer -> shortlist.
 
 This wires the pieces built across #14-#19 into one runnable chain:
 
-    query_expansion (build_query_bundle)      # what to search for
-        -> adapter.fetch(...)                 # raw Candidates (#17)
-        -> scorer.score(...)                  # relevance verdict (#19)
-        -> keep passers                       # score >= RELEVANCE_FLOOR
+    query_expansion (build_query_bundle)               # what to search for
+        -> [adapter.fetch(...) for each adapter]       # raw Candidates (#17 #18)
+        -> scorer.score(...)                           # relevance verdict (#19)
+        -> keep passers                                # score >= RELEVANCE_FLOOR
 
-Persistence of accepted assets and dedup/shortlist ranking are separate issues
-(#20 dedup, #22 asset store), so this returns the scored result in memory and
-the caller decides the next state (SHORTLIST_READY vs REJECTED_EMPTY).
+Multiple adapters (e.g. help-docs text + interactive demo screenshots) are run
+and their Candidates are merged before scoring. Text and image candidates are
+scored in their respective modes by the dual-mode scorer (#19/#45).
 
-Adapter + scorer are injected (default to the real classes, which themselves
-fall back to mock mode via settings.use_collection_mock) so this orchestration
-is unit-testable offline with fakes.
+Adapter(s) + scorer are injected (defaults: HelpDocsAdapter + InteractiveDemoAdapter,
+each with mock fallback via settings.use_collection_mock) so this is testable
+offline with fakes. Pass `adapter=` (singular) for backward-compat with tests
+that inject a single fake.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.services.m2_mapping.mapping_service import get_mapping_card_by_cell
 from app.services.m3_collection.adapters.help_docs import HelpDocsAdapter
+from app.services.m3_collection.adapters.interactive_demo import InteractiveDemoAdapter
 from app.services.m3_collection.contracts import Adapter, Candidate, Score, Scorer
 from app.services.m3_collection.query_expansion import build_query_bundle
 from app.services.m3_collection.scoring.relevance_scorer import RelevanceScorer
@@ -48,27 +50,47 @@ def run_probe_pipeline(
     cell_id: UUID,
     competitor_id: UUID,
     *,
-    adapter: Adapter | None = None,
+    adapter: Adapter | None = None,         # singular — backward compat for tests
+    adapters: list[Adapter] | None = None,  # multi-adapter — takes precedence
     scorer: Scorer | None = None,
     per_bucket_limit: int = 10,
 ) -> ProbeResult:
-    """Fetch candidates for a cell, score them, and return the passers.
+    """Fetch candidates from all adapters, score them, and return the passers.
+
+    Adapter resolution order:
+      1. `adapters` list if provided
+      2. `adapter` singular if provided (wrapped in a list)
+      3. default: [HelpDocsAdapter, InteractiveDemoAdapter]
 
     Does NOT change cell state or persist anything — the caller (probe_cycle)
     owns state transitions. Missing mapping card => no scoring context, treated
-    as zero passers (the cell shouldn't have been enqueued without one, but we
-    fail safe rather than crash).
+    as zero passers.
     """
-    adapter = adapter or HelpDocsAdapter()
+    if adapters is not None:
+        _adapters: list[Adapter] = adapters
+    elif adapter is not None:
+        _adapters = [adapter]
+    else:
+        _adapters = [HelpDocsAdapter(), InteractiveDemoAdapter()]
+
     scorer = scorer or RelevanceScorer()
 
     # 1. What to search for (query expansion, #15).
     bundle = build_query_bundle(db, cell_id, competitor_id)
-    # Route the bucket matching this adapter's source type to it.
-    queries = getattr(bundle, adapter.source_type.value, []) or bundle.generic
 
-    # 2. Raw candidates from the adapter (#17).
-    candidates = adapter.fetch(cell_id, competitor_id, queries, limit=per_bucket_limit)
+    # 2. Run all adapters; route each to the right query bucket.
+    all_candidates: list[Candidate] = []
+    for adp in _adapters:
+        queries = getattr(bundle, adp.source_type.value, []) or bundle.generic
+        try:
+            found = adp.fetch(cell_id, competitor_id, queries, limit=per_bucket_limit)
+            all_candidates.extend(found)
+        except Exception as exc:  # noqa: BLE001 — one failing adapter doesn't kill others
+            import logging
+            logging.getLogger(__name__).warning(
+                "adapter %s failed for cell %s: %s",
+                type(adp).__name__, cell_id, exc,
+            )
 
     # 3. Scoring context from the mapping card (#11 / #2).
     card = get_mapping_card_by_cell(db, cell_id)
@@ -77,9 +99,11 @@ def run_probe_pipeline(
     exclusion = (card.exclusion_criteria if card else "") or ""
 
     # 4. Score each candidate (#19) and keep the passers.
+    #    Text and image candidates are scored in their respective modes
+    #    by the dual-mode scorer (PR #45).
     scored: list[tuple[Candidate, Score]] = []
     passed: list[tuple[Candidate, Score]] = []
-    for cand in candidates:
+    for cand in all_candidates:
         score = scorer.score(
             cand,
             intent_definition=intent,
@@ -90,13 +114,13 @@ def run_probe_pipeline(
         if score.passed:
             passed.append((cand, score))
 
-    # Highest score first — shortlist ordering (dedup/ranking refined in #20).
+    # Highest score first — image candidates tend to rank higher (TEXT_ONLY_CEILING).
     passed.sort(key=lambda cs: cs[1].score, reverse=True)
 
     return ProbeResult(
         cell_id=cell_id,
         competitor_id=competitor_id,
-        candidates_found=len(candidates),
+        candidates_found=len(all_candidates),
         scored=scored,
         passed=passed,
     )
