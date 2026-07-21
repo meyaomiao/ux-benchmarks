@@ -9,33 +9,85 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ux_benchmarks"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - ./backend:/app
       - ./docs:/docs:ro
+      - assets_data:/app/assets
     ports:
       - "8000:8000"
     env_file: ./backend/.env
-    depends_on: [postgres, redis]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   worker:
-    build: ./backend
-    command: celery -A app.workers.celery_app worker --loglevel=info -Q adapters,scoring
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app worker --loglevel=info -Q adapters,scoring -c 4
     volumes:
       - ./backend:/app
+      - assets_data:/app/assets
     env_file: ./backend/.env
-    depends_on: [postgres, redis]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app beat --loglevel=info --scheduler celery.beat.PersistentScheduler
+    volumes:
+      - ./backend:/app
+      - celerybeat_data:/tmp/celerybeat
+    env_file: ./backend/.env
+    depends_on:
+      redis:
+        condition: service_healthy
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     command: npm run dev
     volumes:
       - ./frontend:/app
@@ -43,7 +95,17 @@ services:
       - /app/.next
     ports:
       - "3000:3000"
-    depends_on: [backend]
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 volumes:
   postgres_data:
+  assets_data:
+  celerybeat_data:
