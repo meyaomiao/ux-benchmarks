@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional
-from sqlalchemy import String, Integer, Boolean, ForeignKey, Text, text
+from sqlalchemy import String, Integer, ForeignKey, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
@@ -20,16 +20,18 @@ class MappingCard(TimestampMixin, Base):
     inclusion_criteria: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     exclusion_criteria: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     anchor_screenshot_asset_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("assets.id", use_alter=True, name="fk_mapping_card_anchor_asset"), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey("assets.id", use_alter=True, name="fk_mapping_card_anchor_asset"),
+        nullable=True,
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
     created_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     reviewed_by: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    is_complete: Mapped[Optional[bool]] = mapped_column(
-        Boolean,
-        nullable=True,
-        server_default=text("NULL"),
-        comment="Computed: intent_definition IS NOT NULL AND anchor_screenshot_asset_id IS NOT NULL",
-    )
+    # is_complete is intentionally NOT a DB column — computed in service layer:
+    # card.is_complete = card.intent_definition is not None and card.anchor_screenshot_asset_id is not None
 
     cell: Mapped["GridCell"] = relationship("GridCell")  # type: ignore[name-defined]
+
+    @property
+    def is_complete(self) -> bool:
+        return bool(self.intent_definition and self.anchor_screenshot_asset_id)

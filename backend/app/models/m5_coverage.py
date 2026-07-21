@@ -23,7 +23,9 @@ class CoverageSnapshot(TimestampMixin, Base):
     competitor_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("competitor_entities.id"), nullable=False
     )
-    status: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String, nullable=False, default="UNPROBED", server_default=text("'UNPROBED'")
+    )
     independent_source_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     latest_captured_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     coverage_confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default=text("0.0"))

@@ -1,26 +1,94 @@
-from fastapi import APIRouter, HTTPException
+from uuid import UUID
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+from app.core.database import get_db
+from app.schemas.m0 import (
+    CompetitorCreate, CompetitorUpdate, CompetitorRead, CompetitorListResponse,
+    LexiconEntryCreate, LexiconEntryUpdate, LexiconEntryRead, LexiconListResponse,
+)
+from app.services.m0_registry.competitor_service import (
+    list_competitors, get_competitor, create_competitor, update_competitor
+)
+from app.services.m0_registry import lexicon_service
+from app.core.errors import AppError
 
 router = APIRouter(prefix="/m0", tags=["M0 · Competitor Registry"])
 
-_NI = lambda issue: HTTPException(status_code=501, detail=f"Not implemented — see issue #{issue}")
 
-@router.get("/competitors")
-async def list_competitors(): raise _NI(5)
+@router.get("/competitors", response_model=CompetitorListResponse)
+async def list_competitors_endpoint(
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    status: str | None = None,
+    competitor_type: str | None = None,
+    db: Session = Depends(get_db),
+):
+    items, total = list_competitors(db, limit, offset, status, competitor_type)
+    return CompetitorListResponse(
+        items=items, total=total, limit=limit, offset=offset,
+        has_next=offset + limit < total,
+    )
 
-@router.post("/competitors", status_code=201)
-async def create_competitor(): raise _NI(5)
 
-@router.get("/competitors/{competitor_id}")
-async def get_competitor(competitor_id: str): raise _NI(5)
+@router.post("/competitors", response_model=CompetitorRead, status_code=201)
+async def create_competitor_endpoint(data: CompetitorCreate, db: Session = Depends(get_db)):
+    return create_competitor(db, data)
 
-@router.patch("/competitors/{competitor_id}")
-async def update_competitor(competitor_id: str): raise _NI(5)
 
-@router.get("/lexicon")
-async def list_lexicon(): raise _NI(6)
+@router.get("/competitors/{competitor_id}", response_model=CompetitorRead)
+async def get_competitor_endpoint(competitor_id: UUID, db: Session = Depends(get_db)):
+    obj = get_competitor(db, competitor_id)
+    if not obj:
+        raise AppError("NOT_FOUND", f"Competitor {competitor_id} not found", 404)
+    return obj
 
-@router.post("/lexicon", status_code=201)
-async def create_lexicon_entry(): raise _NI(6)
 
-@router.delete("/lexicon/{entry_id}")
-async def delete_lexicon_entry(entry_id: str): raise _NI(6)
+@router.patch("/competitors/{competitor_id}", response_model=CompetitorRead)
+async def update_competitor_endpoint(
+    competitor_id: UUID, data: CompetitorUpdate, db: Session = Depends(get_db)
+):
+    return update_competitor(db, competitor_id, data)
+
+
+# Issue #6 — Lexicon routes
+@router.get("/lexicon", response_model=LexiconListResponse)
+async def list_lexicon(
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    level: str | None = Query(default=None),
+    term_type: str | None = Query(default=None),
+    language: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    items, total = lexicon_service.list_lexicon(
+        db, limit=limit, offset=offset, level=level, term_type=term_type, language=language
+    )
+    return LexiconListResponse(
+        items=items, total=total, limit=limit, offset=offset,
+        has_next=offset + limit < total,
+    )
+
+
+@router.post("/lexicon", response_model=LexiconEntryRead, status_code=201)
+async def create_lexicon_entry(data: LexiconEntryCreate, db: Session = Depends(get_db)):
+    return lexicon_service.create_lexicon_entry(db, data)
+
+
+@router.get("/lexicon/{entry_id}", response_model=LexiconEntryRead)
+async def get_lexicon_entry(entry_id: UUID, db: Session = Depends(get_db)):
+    entry = lexicon_service.get_lexicon_entry(db, entry_id)
+    if not entry:
+        raise AppError("NOT_FOUND", f"Lexicon entry {entry_id} not found", 404)
+    return entry
+
+
+@router.patch("/lexicon/{entry_id}", response_model=LexiconEntryRead)
+async def update_lexicon_entry(
+    entry_id: UUID, data: LexiconEntryUpdate, db: Session = Depends(get_db)
+):
+    return lexicon_service.update_lexicon_entry(db, entry_id, data)
+
+
+@router.delete("/lexicon/{entry_id}", status_code=204)
+async def delete_lexicon_entry(entry_id: UUID, db: Session = Depends(get_db)):
+    lexicon_service.delete_lexicon_entry(db, entry_id)

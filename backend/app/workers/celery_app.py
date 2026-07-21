@@ -26,7 +26,8 @@ celery_app.conf.update(
     task_routes={
         "app.workers.tasks.probe_cycle.*": {"queue": "adapters"},
         "app.workers.tasks.scoring.*": {"queue": "scoring"},
-        "app.workers.tasks.health.*": {"queue": "celery"},
+        # health tasks → adapters queue (worker already consumes it via -Q adapters,scoring)
+        "app.workers.tasks.health.*": {"queue": "adapters"},
     },
     beat_schedule={
         "freshness-decay-check": {
