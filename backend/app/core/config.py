@@ -10,5 +10,9 @@ class Settings(BaseSettings):
     assets_dir: Path = Path("/app/assets")
     secret_key: str = "dev-secret"
     debug: bool = False
+    # When True (default), collection adapters return deterministic fixtures
+    # instead of hitting the network, so the whole chain runs offline / in CI.
+    # Set to False to enable real httpx/BeautifulSoup fetches.
+    use_collection_mock: bool = True
 
 settings = Settings()
