@@ -59,3 +59,25 @@ export interface ListResponse<T> {
   offset: number;
   has_next: boolean;
 }
+
+// M5 · Coverage
+export type CoverageStatus =
+  | "SATURATED"
+  | "SHORTLIST_READY"
+  | "PARTIAL"
+  | "UNPROBED"
+  | "REJECTED_EMPTY"
+  | "QUEUED"
+  | "PROBING"
+  | "STALE";
+
+export interface CoverageRow {
+  cell_id: string;
+  competitor_id: string;
+  status: CoverageStatus;
+  independent_source_count: number;
+  latest_captured_at: string | null;
+  coverage_confidence: number; // 0–1
+  evidence_type_breakdown: Record<string, number>;
+  tier: string;
+}

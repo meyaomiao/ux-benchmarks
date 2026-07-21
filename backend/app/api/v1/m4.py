@@ -1,26 +1,84 @@
-from fastapi import APIRouter, HTTPException
+from uuid import UUID
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+from app.core.database import get_db
+from app.core.errors import AppError
+from app.schemas.m4 import (
+    ShortlistItem, ShortlistResponse,
+    AcceptRequest, RejectRequest, FlagRequest, ObservationRead,
+)
+from app.services.m4_annotation import review_service
 
 router = APIRouter(prefix="/m4", tags=["M4 · Asset Review & Annotation"])
 
-_NI = lambda issue: HTTPException(status_code=501, detail=f"Not implemented — see issue #{issue}")
 
-@router.get("/assets")
-async def list_assets(): raise _NI(22)
+def _to_shortlist_item(asset) -> ShortlistItem:
+    """Map an Asset ORM row to ShortlistItem, computing the derived field."""
+    return ShortlistItem(
+        id=asset.id,
+        cell_id=asset.cell_id,
+        competitor_id=asset.competitor_id,
+        source_url=asset.source_url,
+        source_type=getattr(asset, "source_type", None),
+        title=getattr(asset, "title", None),
+        snippet=getattr(asset, "snippet", None),
+        evidence_type=asset.evidence_type,
+        ai_score=asset.ai_score,
+        ai_score_breakdown=asset.ai_score_breakdown,
+        rights_status=asset.rights_status,
+        media_disposition=asset.media_disposition,
+        captured_at=asset.captured_at,
+        # Derived — Asset model stores file_path, not image_path_available.
+        image_path_available=bool(asset.file_path),
+    )
 
-@router.post("/assets/accept", status_code=201)
-async def accept_asset(): raise _NI(23)
 
-@router.delete("/assets/{asset_id}")
-async def reject_asset(asset_id: str): raise _NI(22)
+# --- Shortlist (#23) --------------------------------------------------------
+
+@router.get("/shortlist/{cell_id}/{competitor_id}", response_model=ShortlistResponse)
+async def get_shortlist(
+    cell_id: UUID, competitor_id: UUID, db: Session = Depends(get_db)
+):
+    """Assets awaiting human review for a (cell, competitor) pair."""
+    assets = review_service.get_shortlist(db, cell_id, competitor_id)
+    items = [_to_shortlist_item(a) for a in assets]
+    return ShortlistResponse(items=items, total=len(items))
+
+
+@router.post("/shortlist/accept", response_model=ObservationRead, status_code=201)
+async def accept_asset(data: AcceptRequest, db: Session = Depends(get_db)):
+    """Accept an Asset — creates an Observation and triggers coverage recompute."""
+    return review_service.accept_asset(
+        db, data.asset_id, data.observation_fields
+    )
+
+
+@router.post("/shortlist/reject", response_model=dict, status_code=200)
+async def reject_asset(data: RejectRequest, db: Session = Depends(get_db)):
+    """Soft-remove an Asset from the shortlist (is_superseded = True)."""
+    asset = review_service.reject_asset(db, data.asset_id, data.reason)
+    return {"asset_id": str(asset.id), "is_superseded": asset.is_superseded}
+
+
+@router.post("/shortlist/flag", response_model=dict, status_code=200)
+async def flag_asset(data: FlagRequest, db: Session = Depends(get_db)):
+    """Flag an Asset for follow-up (placeholder — real queue is a future issue)."""
+    asset = review_service.flag_asset(db, data.asset_id, data.note)
+    return {"asset_id": str(asset.id), "flagged": True}
+
+
+# --- Observations (#24, stubs) ----------------------------------------------
 
 @router.get("/observations")
-async def list_observations(): raise _NI(24)
+async def list_observations():
+    raise HTTPException(status_code=501, detail="Not implemented — see issue #24")
 
-@router.post("/observations", status_code=201)
-async def create_observation(): raise _NI(24)
 
 @router.get("/observations/{observation_id}")
-async def get_observation(observation_id: str): raise _NI(24)
+async def get_observation(observation_id: str):
+    raise HTTPException(status_code=501, detail="Not implemented — see issue #24")
+
 
 @router.post("/observations/{observation_id}/claims", status_code=201)
-async def add_claim(observation_id: str): raise _NI(25)
+async def add_claim(observation_id: str):
+    raise HTTPException(status_code=501, detail="Not implemented — see issue #25")
