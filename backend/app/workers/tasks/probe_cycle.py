@@ -7,6 +7,8 @@ from app.workers.celery_app import celery_app
 from app.services.m3_collection.coverage_state_service import transition_state
 from app.services.m3_collection.state_machine import CellState
 from app.services.m3_collection.pipeline import run_probe_pipeline
+from app.services.m3_collection.asset_store import persist_passing
+from app.services.m3_collection.coverage_recompute import recompute_coverage
 
 logger = get_task_logger(__name__)
 
@@ -40,16 +42,27 @@ def run_probe_cycle(self, cell_id: str, competitor_id: str):
             db, cell_id, competitor_id, CellState.PROBING, note="probe_cycle.run"
         )
 
-        # 2. Fetch -> score.
-        result = run_probe_pipeline(db, UUID(cell_id), UUID(competitor_id))
+        cid, kid = UUID(cell_id), UUID(competitor_id)
 
-        # 3. Finalise: passers -> SHORTLIST_READY, else REJECTED_EMPTY.
-        final = (
-            CellState.SHORTLIST_READY if result.has_passers else CellState.REJECTED_EMPTY
-        )
-        snapshot = transition_state(
-            db, cell_id, competitor_id, final, note="probe_cycle.finalise"
-        )
+        # 2. Fetch -> score.
+        result = run_probe_pipeline(db, cid, kid)
+
+        if result.has_passers:
+            # 3a. Persist passing candidates as write-once Assets (#22/#20),
+            #     then recompute coverage from those Assets. recompute_coverage
+            #     drives PROBING -> SHORTLIST_READY and writes the real metrics;
+            #     it never sets SATURATED (human gate lives in #23/#24).
+            assets = persist_passing(db, cid, kid, result.passed)
+            snapshot = recompute_coverage(db, cid, kid)
+            persisted = len(assets)
+        else:
+            # 3b. No usable evidence -> REJECTED_EMPTY.
+            snapshot = transition_state(
+                db, cell_id, competitor_id, CellState.REJECTED_EMPTY,
+                note="probe_cycle: no passing evidence",
+            )
+            persisted = 0
+
         status = snapshot.status
         probe_cycles = snapshot.probe_cycles
     finally:
@@ -67,4 +80,5 @@ def run_probe_cycle(self, cell_id: str, competitor_id: str):
         "probe_cycles": probe_cycles,
         "candidates_found": result.candidates_found,
         "passed": len(result.passed),
+        "persisted": persisted,
     }
