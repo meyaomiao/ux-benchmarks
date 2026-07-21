@@ -1,10 +1,17 @@
 from celery import Celery
+from celery.utils.log import get_task_logger
 from app.core.config import settings
+
+logger = get_task_logger(__name__)
 
 celery_app = Celery(
     "ux_benchmarks",
     broker=settings.redis_url,
     backend=settings.redis_url,
+    include=[
+        "app.workers.tasks.health",
+        "app.workers.tasks.probe_cycle",
+    ],
 )
 
 celery_app.conf.update(
@@ -13,8 +20,18 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    worker_prefetch_multiplier=1,
     task_routes={
-        "app.workers.adapters.*": {"queue": "adapters"},
-        "app.workers.scoring.*": {"queue": "scoring"},
+        "app.workers.tasks.probe_cycle.*": {"queue": "adapters"},
+        "app.workers.tasks.scoring.*": {"queue": "scoring"},
+        "app.workers.tasks.health.*": {"queue": "celery"},
+    },
+    beat_schedule={
+        "freshness-decay-check": {
+            "task": "app.workers.tasks.health.ping",
+            "schedule": 3600.0,  # 每小时，Phase 2 换成真正的 freshness check
+        },
     },
 )
