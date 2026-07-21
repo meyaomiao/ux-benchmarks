@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UX 标杆工具 · 形态草图</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --panel:#ffffff; --ink:#1a1d24; --muted:#6b7280;
+    --line:#e4e7ec; --line2:#d0d5dd; --accent:#4f46e5; --accent-soft:#eef2ff;
+    --ok:#0f9d58; --ok-bg:#e6f4ea; --warn:#c77700; --warn-bg:#fdf2e0;
+    --miss:#c0392b; --miss-bg:#fbeae8; --wall:#8b93a1; --wall-bg:#eceef1;
+    --lead:#4f46e5; --lead-bg:#eef2ff;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    background:var(--bg);color:var(--ink);line-height:1.55;font-size:14px}
+  .app{display:grid;grid-template-columns:210px 1fr;min-height:100vh}
+  /* sidebar */
+  .side{background:#12151c;color:#c7ccd6;padding:20px 16px;display:flex;flex-direction:column;gap:4px}
+  .brand{color:#fff;font-weight:700;font-size:16px;letter-spacing:.3px;margin-bottom:4px}
+  .brand small{display:block;color:#8b93a1;font-weight:400;font-size:11px;margin-top:3px;letter-spacing:0}
+  .navlbl{color:#5f6774;font-size:10px;letter-spacing:1px;text-transform:uppercase;margin:16px 0 4px}
+  .nav{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:7px;cursor:pointer;color:#c7ccd6;font-size:13px;transition:.12s}
+  .nav:hover{background:#1c202a;color:#fff}
+  .nav.on{background:var(--accent);color:#fff}
+  .nav .n{width:18px;height:18px;border-radius:5px;background:#2a2f3a;display:grid;place-items:center;font-size:11px;color:#c7ccd6;flex:none}
+  .nav.on .n{background:rgba(255,255,255,.22);color:#fff}
+  .side-foot{margin-top:auto;color:#5f6774;font-size:10px;padding-top:16px;border-top:1px solid #232833}
+  /* main */
+  .main{padding:26px 34px;overflow:auto}
+  .crumb{color:var(--muted);font-size:12px;margin-bottom:3px}
+  h1{font-size:20px;margin-bottom:5px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:22px;max-width:760px}
+  .page{display:none;animation:fade .2s ease}
+  .page.on{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:16px}
+  .card h3{font-size:14px;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+  .tag{font-size:11px;padding:2px 8px;border-radius:20px;background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .hint{color:var(--muted);font-size:12px;margin-top:10px;padding-left:12px;border-left:2px solid var(--line2)}
+
+  /* pipeline */
+  .flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
+  .step{flex:1;min-width:130px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px 14px;position:relative;margin:4px 14px 4px 0}
+  .step:after{content:"→";position:absolute;right:-16px;top:50%;transform:translateY(-50%);color:var(--line2);font-size:18px}
+  .step:last-child:after{display:none}
+  .step .k{font-size:11px;color:var(--accent);font-weight:700;margin-bottom:4px}
+  .step .t{font-size:13px;font-weight:600;margin-bottom:2px}
+  .step .d{font-size:11px;color:var(--muted)}
+
+  /* input bar */
+  .inbar{display:flex;gap:10px;align-items:center;background:var(--panel);border:1px solid var(--line2);border-radius:10px;padding:10px 14px;margin-bottom:18px}
+  .inbar input{border:none;outline:none;flex:1;font-size:14px;color:var(--ink);background:transparent}
+  .inbar .go{background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:7px;font-size:13px;cursor:pointer;font-weight:600}
+  .chip{font-size:11px;color:var(--muted);background:var(--bg);border:1px solid var(--line);padding:3px 9px;border-radius:20px}
+
+  /* grid matrix */
+  .gridwrap{overflow-x:auto}
+  table.grid{border-collapse:separate;border-spacing:0;width:100%;min-width:640px;font-size:12px}
+  table.grid th{text-align:left;padding:8px 10px;color:var(--muted);font-weight:600;font-size:11px;border-bottom:1px solid var(--line)}
+  table.grid th.rot{text-align:center;white-space:nowrap}
+  table.grid td{padding:0;border-bottom:1px solid var(--line)}
+  .rowh{padding:9px 10px;font-size:12px;white-space:nowrap}
+  .rowh b{font-weight:600}.rowh span{color:var(--muted);display:block;font-size:11px}
+  .cell{margin:4px;height:34px;border-radius:6px;display:grid;place-items:center;font-size:11px;font-weight:600;cursor:default}
+  .c-ok{background:var(--ok-bg);color:var(--ok)}
+  .c-warn{background:var(--warn-bg);color:var(--warn)}
+  .c-miss{background:var(--miss-bg);color:var(--miss)}
+  .c-wall{background:var(--wall-bg);color:var(--wall);background-image:repeating-linear-gradient(45deg,transparent,transparent 4px,rgba(0,0,0,.05) 4px,rgba(0,0,0,.05) 8px)}
+  .c-empty{background:#fafbfc;color:#c0c6cf;border:1px dashed var(--line2)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:11px;color:var(--muted)}
+  .legend i{width:11px;height:11px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:-1px}
+  .meter{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+  .bar{flex:1;height:9px;background:var(--line);border-radius:6px;overflow:hidden;max-width:260px}
+  .bar i{display:block;height:100%;background:var(--ok);width:42%}
+  .meter b{font-size:20px}.meter span{color:var(--muted);font-size:12px}
+
+  /* leader matrix */
+  .lead-cell{margin:4px;padding:7px 8px;border-radius:7px;min-height:44px;font-size:11px;cursor:pointer;transition:.12s;border:1px solid transparent}
+  .lead-cell.star{background:var(--lead-bg);border-color:#c7cdfa}
+  .lead-cell.star:hover{border-color:var(--accent)}
+  .lead-cell .who{font-weight:700;color:var(--lead);display:flex;align-items:center;gap:4px}
+  .lead-cell .conf{color:var(--muted);font-size:10px;margin-top:2px}
+  .lead-cell.dim{color:#b8bec8}
+  .cross{font-size:10px;background:#fff5e6;color:var(--warn);padding:1px 5px;border-radius:4px;font-weight:600}
+
+  /* insight card */
+  .insight{max-width:720px}
+  .ins-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:4px}
+  .ins-title{font-size:16px;font-weight:700}
+  .ins-id{font-size:11px;color:var(--muted);font-family:ui-monospace,monospace}
+  .badges{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 16px}
+  .badge{font-size:11px;padding:3px 9px;border-radius:20px;background:var(--bg);border:1px solid var(--line);color:var(--muted)}
+  .badge.hi{background:var(--ok-bg);color:var(--ok);border-color:transparent}
+  .field{border-top:1px solid var(--line);padding:11px 0;display:grid;grid-template-columns:120px 1fr;gap:14px}
+  .field .lbl{font-size:11px;color:var(--muted);font-weight:600;padding-top:1px}
+  .field .val{font-size:13px}
+  .field .val .ev{display:inline-flex;align-items:center;gap:4px;font-size:11px;background:var(--accent-soft);color:var(--accent);padding:2px 7px;border-radius:5px;margin:2px 4px 2px 0;cursor:pointer}
+  .field .val .ev.claimed{background:var(--wall-bg);color:var(--wall)}
+  .principle{background:var(--accent-soft);border-radius:8px;padding:11px 13px;font-size:13px;color:#3730a3;font-weight:500}
+
+  /* recompose */
+  .compose{display:grid;grid-template-columns:230px 1fr;gap:18px}
+  .controls .grp{margin-bottom:16px}
+  .controls .glbl{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px}
+  .opt{display:block;padding:8px 11px;border:1px solid var(--line);border-radius:7px;margin-bottom:6px;cursor:pointer;font-size:12px;transition:.12s;background:var(--panel)}
+  .opt:hover{border-color:var(--line2)}
+  .opt.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .preview{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:0;overflow:hidden;min-height:360px}
+  .pv-bar{background:var(--bg);border-bottom:1px solid var(--line);padding:9px 16px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between}
+  .pv-body{padding:22px 26px}
+  .deck-title{font-size:18px;font-weight:700;margin-bottom:3px}
+  .deck-meta{font-size:11px;color:var(--muted);margin-bottom:18px}
+  .slide{border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:10px}
+  .slide .sn{font-size:10px;color:var(--accent);font-weight:700;letter-spacing:.5px}
+  .slide .sh{font-size:14px;font-weight:600;margin:2px 0 6px}
+  .slide ul{margin-left:16px;font-size:12px;color:#333}
+  .reuse{font-size:11px;color:var(--muted);margin-top:8px;font-style:italic}
+  .pill{display:inline-block;font-size:10px;background:var(--lead-bg);color:var(--lead);padding:1px 7px;border-radius:10px;font-family:ui-monospace,monospace}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- SIDEBAR -->
+  <aside class="side">
+    <div class="brand">Benchmarks<small>UX 设计标杆工具 · 形态草图</small></div>
+    <div class="navlbl">工作流</div>
+    <div class="nav on" data-p="flow"><span class="n">◇</span>产品概览</div>
+    <div class="nav" data-p="grid"><span class="n">1</span>场景网格 · 覆盖矩阵</div>
+    <div class="nav" data-p="leader"><span class="n">2</span>场景 × 领先者</div>
+    <div class="nav" data-p="insight"><span class="n">3</span>证据化洞察卡</div>
+    <div class="nav" data-p="compose"><span class="n">4</span>自由重组输出</div>
+    <div class="side-foot">示例输入：<br>「项目管理工具 / Linear」<br>示例场景：邀请协作者+权限分级</div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+
+    <!-- 0 OVERVIEW -->
+    <section class="page on" id="flow">
+      <div class="crumb">产品概览</div>
+      <h1>一条链路：发现标杆 → 证明领先 → 转译洞察 → 按目标重组</h1>
+      <p class="sub">核心主轴：内容只写一次（进网格的格子、写成洞察卡），视图无限次（矩阵 / 旅程对比 / 汇报物都只是重组）。下面每一步点左侧导航可展开看具体界面。</p>
+      <div class="flow">
+        <div class="step"><div class="k">输入</div><div class="t">品类 / 产品名</div><div class="d">如"项目管理工具"或"Linear"</div></div>
+        <div class="step"><div class="k">STEP 1</div><div class="t">拆场景网格</div><div class="d">任务×阶段×页面状态，并扩展跨行业标杆</div></div>
+        <div class="step"><div class="k">STEP 1+2</div><div class="t">铺证据·判领先</div><div class="d">覆盖矩阵暴露空洞，场景级判断谁领先</div></div>
+        <div class="step"><div class="k">STEP 3</div><div class="t">写洞察卡</div><div class="d">证据锚定的标准化判断，非空话</div></div>
+        <div class="step"><div class="k">STEP 4</div><div class="t">重组输出</div><div class="d">受众×目标×时长 → 汇报物</div></div>
+      </div>
+      <div class="card" style="margin-top:18px">
+        <h3><span class="tag">关键概念</span>「场景网格」是母体，不是旅程地图</h3>
+        <p style="font-size:13px;color:#333">场景网格是一个三轴坐标系：<b>用户任务(JTBD) × 旅程阶段 × 关键页面/状态</b>。旅程地图只是固定一个任务、沿"阶段"轴横切出的<b>一行</b>——它是网格的一个切片，而不是网格本身。所有输出物（旅程对比、单竞品深拆、机会地图）都是从这张网格投影出来的不同视图。</p>
+      </div>
+    </section>
+
+    <!-- 1 GRID / COVERAGE -->
+    <section class="page" id="grid">
+      <div class="crumb">STEP 1 · 场景网格</div>
+      <h1>覆盖矩阵：把产品拆成可寻址的格子，让空洞自己现形</h1>
+      <p class="sub">行=场景（任务×阶段×页面状态），列=竞品。每格颜色 = 证据充分度。"全"不再是"搜了多少"，而是这张矩阵的填充率——采不到的墙后区诚实标灰，而非假装不存在。</p>
+      <div class="meter"><b>42%</b><div class="bar"><i></i></div><span>覆盖率 · 已充分 18 / 薄弱 9 / 缺失 6 / 墙后不可得 10 格</span></div>
+      <div class="card">
+        <div class="gridwrap">
+        <table class="grid">
+          <thead><tr>
+            <th>场景（任务 · 阶段 · 页面/状态）</th>
+            <th class="rot">Linear</th><th class="rot">Asana</th><th class="rot">Notion</th>
+            <th class="rot">Figma<br><small style="color:var(--accent)">跨行业</small></th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td><div class="rowh"><b>发送邀请</b><span>首次配置 · 邀请弹窗</span></div></td>
+              <td><div class="cell c-ok">已充分</div></td>
+              <td><div class="cell c-ok">已充分</div></td>
+              <td><div class="cell c-ok">已充分</div></td>
+              <td><div class="cell c-ok">已充分</div></td>
+            </tr>
+            <tr>
+              <td><div class="rowh"><b>权限分级</b><span>首次配置 · 角色选择</span></div></td>
+              <td><div class="cell c-ok">已充分</div></td>
+              <td><div class="cell c-warn">薄弱</div></td>
+              <td><div class="cell c-ok">已充分</div></td>
+              <td><div class="cell c-ok">已充分</div></td>
+            </tr>
+            <tr>
+              <td><div class="rowh"><b>自定义角色矩阵</b><span>进阶配置 · 权限编辑页</span></div></td>
+              <td><div class="cell c-wall">墙后</div></td>
+              <td><div class="cell c-wall">墙后</div></td>
+              <td><div class="cell c-warn">薄弱</div></td>
+              <td><div class="cell c-ok">已充分</div></td>
+            </tr>
+            <tr>
+              <td><div class="rowh"><b>权限冲突提示</b><span>异常态 · 错误提示</span></div></td>
+              <td><div class="cell c-ok">已充分</div></td>
+              <td><div class="cell c-miss">缺失</div></td>
+              <td><div class="cell c-empty">未探测</div></td>
+              <td><div class="cell c-warn">薄弱</div></td>
+            </tr>
+            <tr>
+              <td><div class="rowh"><b>批量改权限</b><span>规模化 · 成员列表</span></div></td>
+              <td><div class="cell c-warn">薄弱</div></td>
+              <td><div class="cell c-ok">已充分</div></td>
+              <td><div class="cell c-wall">墙后</div></td>
+              <td><div class="cell c-empty">未探测</div></td>
+            </tr>
+          </tbody>
+        </table>
+        </div>
+        <div class="legend">
+          <span><i style="background:var(--ok-bg)"></i>已充分（≥3 独立来源 observed）</span>
+          <span><i style="background:var(--warn-bg)"></i>薄弱（单一来源/过期）</span>
+          <span><i style="background:var(--miss-bg)"></i>缺失（找过但零命中）</span>
+          <span><i style="background:var(--wall-bg)"></i>墙后不可得（Tier C，挂缺口牌）</span>
+          <span><i style="background:#fafbfc;border:1px dashed var(--line2)"></i>未探测</span>
+        </div>
+        <p class="hint">"权限冲突提示"这类异常态最能体现设计功力，却是旅程地图一笔带过的地方——在网格里它是独立的一格，可比较、可寻址。</p>
+      </div>
+    </section>
+
+    <!-- 2 LEADER MATRIX -->
+    <section class="page" id="leader">
+      <div class="crumb">STEP 1+2 · 发现结果</div>
+      <h1>场景 × 领先者：不是"谁最好"，是"这个动作该学谁"</h1>
+      <p class="sub">同一批格子，换一个视角看：每格填的是<b>该场景的领先者</b>，而非综合排名。冠军经常不是同一家，甚至来自跨行业。点亮的格子可下钻到证据与洞察卡。</p>
+      <div class="card">
+        <div class="gridwrap">
+        <table class="grid">
+          <thead><tr>
+            <th style="min-width:190px">场景</th>
+            <th class="rot">谁领先</th><th class="rot">凭什么（证据）</th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td><div class="rowh"><b>权限分级</b><span>首次配置 · 角色选择</span></div></td>
+              <td><div class="lead-cell star" data-go="insight"><div class="who">★ Linear</div><div class="conf">置信度 高 · observed</div></div></td>
+              <td><div class="lead-cell">3 类证据交叉：<br>帮助文档 + 交互 demo + 用户实测</div></td>
+            </tr>
+            <tr>
+              <td><div class="rowh"><b>自定义角色矩阵</b><span>进阶 · 权限编辑页</span></div></td>
+              <td><div class="lead-cell star"><div class="who">★ Figma <span class="cross">跨行业</span></div><div class="conf">置信度 中 · observed</div></div></td>
+              <td><div class="lead-cell">项目管理三家全在墙后，<br>最佳答案来自设计工具</div></td>
+            </tr>
+            <tr>
+              <td><div class="rowh"><b>权限冲突提示</b><span>异常态 · 错误提示</span></div></td>
+              <td><div class="lead-cell star"><div class="who">★ Linear</div><div class="conf">置信度 高 · observed</div></div></td>
+              <td><div class="lead-cell">错误态设计信号 +<br>专家启发式 rubric</div></td>
+            </tr>
+            <tr>
+              <td><div class="rowh"><b>批量改权限</b><span>规模化 · 成员列表</span></div></td>
+              <td><div class="lead-cell dim"><div class="who" style="color:#b8bec8">— 证据不足</div><div class="conf">仅 claimed，待升级采集</div></div></td>
+              <td><div class="lead-cell dim">Notion/Figma 墙后，<br>已进"申请 demo"通道</div></td>
+            </tr>
+          </tbody>
+        </table>
+        </div>
+        <p class="hint">这张矩阵本身就是一种输出视图（"同任务多竞品横比"）。注意第 2 行——若按"综合排行榜"就会漏掉 Figma，因为它根本不是项目管理工具。</p>
+      </div>
+    </section>
+
+    <!-- 3 INSIGHT CARD -->
+    <section class="page" id="insight">
+      <div class="crumb">STEP 3 · 证据化洞察</div>
+      <h1>洞察卡：可进入设计决策的判断，不是"简洁流畅"</h1>
+      <p class="sub">从领先格子下钻而来。每个字段都有硬门槛，每条证据都能回指原始素材、带版本和采集时间。这是唯一的"内容写入口"，后面所有汇报物都只引用它、不重写它。</p>
+      <div class="card insight">
+        <div class="ins-head">
+          <div>
+            <div class="ins-title">用键盘优先的角色选择，把权限设置从"读文档"变成"边做边懂"</div>
+            <div class="ins-id">#INS-0142 · Linear · 权限分级 × 首次配置</div>
+          </div>
+        </div>
+        <div class="badges">
+          <span class="badge hi">置信度 高</span>
+          <span class="badge">observed 亲眼所见</span>
+          <span class="badge">Tier A 公开可采</span>
+          <span class="badge">交互模式：命令面板</span>
+          <span class="badge">我司差距：缺失</span>
+          <span class="badge">优先级：高（impact 高 / effort 中）</span>
+        </div>
+
+        <div class="field"><div class="lbl">① 解决什么任务</div><div class="val">首次为新成员分配角色时，快速理解每个角色"能做什么、不能做什么"。</div></div>
+        <div class="field"><div class="lbl">② 旧方案的问题</div><div class="val">传统下拉菜单只给"管理员/成员/访客"标签，权限差异藏在帮助文档里，用户被迫离开配置流程去查证，认知断裂。</div></div>
+        <div class="field"><div class="lbl">③ 采用的机制</div><div class="val">选中角色时，右侧实时展开该角色的权限清单（可见/可编辑/可删除逐条列出），键盘上下键即可预览对比。
+          <div><span class="ev">▶ 录屏 v2024.3 · 07-02 采集</span><span class="ev">▶ 帮助文档截图</span><span class="ev claimed">◲ 定价页（claimed）</span></div></div></div>
+        <div class="field"><div class="lbl">④ 为何更优（成本）</div><div class="val"><b>认知成本↓</b> 权限差异所见即所得，无需离开流程；<b>决策风险↓</b> 授权前先看清后果，减少误授管理员。</div></div>
+        <div class="field"><div class="lbl">⑤ 相对优势</div><div class="val">对比 Asana（选完才知道权限）与 Notion（需悬停逐个查看），Linear 是唯一在选择当下就完整呈现后果的。</div></div>
+        <div class="field"><div class="lbl">⑥ 限制/适用条件</div><div class="val">适用于角色数 ≤ 6 的场景；角色过多时清单过长反而增加负担。证据强度：observed（实测录屏）。</div></div>
+        <div class="field"><div class="lbl">⑦ 可转译原则</div><div class="val"><div class="principle">「让不可逆的授权决策，在执行前所见即所得」——去品牌化，可迁移到任何涉及权限/危险操作的配置流程。</div></div></div>
+        <div class="field"><div class="lbl">⑧ 对我司启发</div><div class="val">我司成员设置页目前是纯下拉（差距=缺失）。建议：在角色选择右侧增加实时权限预览面板，优先级高。</div></div>
+      </div>
+    </section>
+
+    <!-- 4 RECOMPOSE -->
+    <section class="page" id="compose">
+      <div class="crumb">STEP 4 · 自由重组</div>
+      <h1>同一批洞察，按受众×目标×时长重新投影成汇报物</h1>
+      <p class="sub">不重新生成内容，只重新编排引用。改一颗洞察卡，所有引用它的汇报物同步更新。左侧调参数，右侧实时变形。</p>
+      <div class="compose">
+        <div class="controls">
+          <div class="grp"><div class="glbl">汇报对象</div>
+            <label class="opt on" data-k="aud" data-v="exec">管理层</label>
+            <label class="opt" data-k="aud" data-v="designer">设计师</label>
+            <label class="opt" data-k="aud" data-v="pm">产品经理</label>
+          </div>
+          <div class="grp"><div class="glbl">目标</div>
+            <label class="opt on" data-k="goal" data-v="decision">争取立项决策</label>
+            <label class="opt" data-k="goal" data-v="review">指导设计评审</label>
+            <label class="opt" data-k="goal" data-v="map">盘点机会地图</label>
+          </div>
+          <div class="grp"><div class="glbl">时长</div>
+            <label class="opt on" data-k="len" data-v="5">5 分钟</label>
+            <label class="opt" data-k="len" data-v="15">15 分钟</label>
+            <label class="opt" data-k="len" data-v="full">完整报告</label>
+          </div>
+        </div>
+        <div class="preview">
+          <div class="pv-bar"><span id="pv-type">管理层 · 5 分钟决策摘要</span><span>由 12 颗洞察卡投影 · 内容零重写</span></div>
+          <div class="pv-body" id="pv-body"><!-- filled by JS --></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  // nav
+  document.querySelectorAll('.nav').forEach(n=>{
+    n.onclick=()=>{
+      document.querySelectorAll('.nav').forEach(x=>x.classList.remove('on'));
+      n.classList.add('on');
+      document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
+      document.getElementById(n.dataset.p).classList.add('on');
+      document.querySelector('.main').scrollTop=0;
+    };
+  });
+  // drill from leader star to insight
+  document.querySelectorAll('[data-go]').forEach(el=>{
+    el.onclick=()=>document.querySelector('.nav[data-p="'+el.dataset.go+'"]').click();
+  });
+
+  // recompose engine
+  const state={aud:'exec',goal:'decision',len:'5'};
+  const audName={exec:'管理层',designer:'设计师',pm:'产品经理'};
+  const goalName={decision:'决策摘要',review:'设计评审',map:'机会地图'};
+  const lenName={'5':'5 分钟','15':'15 分钟','full':'完整报告'};
+
+  function render(){
+    document.getElementById('pv-type').textContent =
+      audName[state.aud]+' · '+lenName[state.len]+' '+goalName[state.goal];
+    const body=document.getElementById('pv-body');
+    let title, meta, slides=[];
+
+    // audience decides which FIELDS of the same cards are exposed
+    if(state.aud==='exec'){
+      title='项目管理工具 · 权限体验机会（管理层视角）';
+      meta='暴露字段：结论 + 建议 + 优先级 ｜ 隐藏：证据细节、机制';
+      slides=[
+        ['结论','我司权限设置体验落后头部竞品 2 个身位',['3 个高价值场景我司为"缺失/薄弱"','Linear 在权限分级、错误态两项领先']],
+        ['机会','投入中、影响高的 Top 1 改进',['角色选择实时权限预览（引用 #INS-0142）','预计降低误授权，减少支持工单']],
+        ['决策请求','立项一个权限体验专项',['1 名设计师 × 2 周','复用已验证的跨竞品洞察，风险低']],
+      ];
+    } else if(state.aud==='designer'){
+      title='权限体验 · 交互模式专题（设计师视角）';
+      meta='暴露字段：证据 + 机制 + 原则 + 限制 ｜ 隐藏：立项话术';
+      slides=[
+        ['证据拆解','Linear 键盘优先角色选择（#INS-0142）',['录屏 v2024.3 逐帧：选中即展开权限清单','对比 Asana/Notion 的滞后反馈']],
+        ['可迁移原则','让不可逆授权在执行前所见即所得',['适用角色数 ≤ 6；过多时需分组','跨行业参照：Figma 权限矩阵']],
+        ['落地草案','我司成员设置页改造点',['右侧新增实时预览面板','异常态：补权限冲突提示（参照 Linear）']],
+      ];
+    } else {
+      title='权限体验差距 · 优先级清单（PM 视角）';
+      meta='暴露字段：建议 + 我司差距 + impact/effort ｜ 按优先级排序';
+      slides=[
+        ['P0','角色选择实时权限预览',['差距=缺失 · impact 高 / effort 中','引用 #INS-0142']],
+        ['P1','权限冲突错误提示',['差距=缺失 · impact 中 / effort 低','异常态，投入小见效快']],
+        ['P2','自定义角色矩阵（企业版）',['证据不足·墙后 · 需先申请竞品 demo','影响大但依赖一手证据供给']],
+      ];
+    }
+
+    // length decides how many slides / depth
+    let show=slides;
+    if(state.len==='5') show=slides.slice(0,3);
+    if(state.len==='15') show=slides;
+    let extra = state.len==='full' ? '<div class="slide"><div class="sn">附录</div><div class="sh">完整证据链与来源清单</div><ul><li>每颗洞察卡的原始素材、版本、采集时间</li><li>覆盖矩阵快照（42%）与缺口说明</li></ul></div>' : '';
+
+    body.innerHTML='<div class="deck-title">'+title+'</div><div class="deck-meta">'+meta+'</div>'+
+      show.map(s=>'<div class="slide"><div class="sn">'+s[0]+'</div><div class="sh">'+s[1]+'</div><ul>'+s[2].map(x=>'<li>'+x+'</li>').join('')+'</ul></div>').join('')+
+      extra+
+      '<div class="reuse">↺ 同一颗 <span class="pill">#INS-0142</span> 在三种视角里反复出现，但只存在一份——切换上面的参数，它换的是"露出哪些字段、排在第几位"，不是重新写。</div>';
+  }
+  document.querySelectorAll('.opt').forEach(o=>{
+    o.onclick=()=>{
+      document.querySelectorAll('.opt[data-k="'+o.dataset.k+'"]').forEach(x=>x.classList.remove('on'));
+      o.classList.add('on');
+      state[o.dataset.k]=o.dataset.v;
+      render();
+    };
+  });
+  render();
+</script>
+</body>
+</html>
