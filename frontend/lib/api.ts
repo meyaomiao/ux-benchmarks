@@ -5,7 +5,10 @@ import type { Competitor, LexiconEntry, GridCell, ListResponse, CoverageRow, Sho
 import { mockCompetitors, mockLexicon, mockCells, mockCoverage, mockShortlist, mockMappingCards, mockReports, mockReportBody, mockInsights } from "./mock";
 
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK !== "false";
-const BASE = "/api/v1";
+// In real mode we hit the backend directly (NEXT_PUBLIC_API_BASE) to bypass the
+// Next.js dev rewrite proxy's 30s hard timeout, which kills slow Claude calls.
+// Falls back to the same-origin proxy path when the env var isn't set.
+const BASE = process.env.NEXT_PUBLIC_API_BASE || "/api/v1";
 
 function paginate<T>(items: T[]): ListResponse<T> {
   return { items, total: items.length, limit: items.length, offset: 0, has_next: false };
@@ -94,7 +97,7 @@ export const api = {
         updated_at: new Date().toISOString(),
       } as GridCell;
     }
-    const res = await fetch('/api/v1/m1/cells', {
+    const res = await fetch(`${BASE}/m1/cells`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -145,7 +148,7 @@ export const api = {
         generated_by: "mock",
       };
     }
-    const res = await fetch("/api/v1/m1/cells/generate", {
+    const res = await fetch(`${BASE}/m1/cells/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ category, known_products: knownProducts }),
@@ -254,7 +257,7 @@ export const api = {
     const params = new URLSearchParams();
     if (cellId) params.set("cell_id", cellId);
     if (competitorId) params.set("competitor_id", competitorId);
-    const res = await fetch(`/api/v1/m4/insights?${params}`);
+    const res = await fetch(`${BASE}/m4/insights?${params}`);
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   },
@@ -287,7 +290,7 @@ export const api = {
       mockInsights.push(ins); // persist to shared mock store
       return ins;
     }
-    const res = await fetch("/api/v1/m4/insights/generate", {
+    const res = await fetch(`${BASE}/m4/insights/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cell_id: cellId, competitor_id: competitorId }),
@@ -301,7 +304,7 @@ export const api = {
       await new Promise(r => setTimeout(r, 150));
       return { id: insightId, ...data } as Insight;
     }
-    const res = await fetch(`/api/v1/m4/insights/${insightId}`, {
+    const res = await fetch(`${BASE}/m4/insights/${insightId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
