@@ -1,7 +1,7 @@
 // API client. Falls back to mock data when NEXT_PUBLIC_USE_MOCK !== "false".
 // Backend endpoints mirror docs/collection-phase-spec-v2.md (M0 / M1).
 
-import type { Competitor, LexiconEntry, GridCell, ListResponse, CoverageRow, ShortlistResponse, MappingCard, QueueItem } from "./types";
+import type { Competitor, LexiconEntry, GridCell, ListResponse, CoverageRow, ShortlistResponse, MappingCard, QueueItem, Insight } from "./types";
 import { mockCompetitors, mockLexicon, mockCells, mockCoverage, mockShortlist, mockMappingCards } from "./mock";
 
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK !== "false";
@@ -154,6 +154,63 @@ export const api = {
     const res = await fetch(`${BASE}/m2/mapping-cards/${cellId}`);
     if (res.status === 404) return null;
     if (!res.ok) throw new Error(`getMappingCard failed: ${res.status}`);
+    return res.json();
+  },
+
+  // L3 · Insights
+  listInsights: async (cellId?: string, competitorId?: string): Promise<Insight[]> => {
+    if (USE_MOCK) {
+      await new Promise(r => setTimeout(r, 150));
+      return []; // empty by default; user generates them
+    }
+    const params = new URLSearchParams();
+    if (cellId) params.set("cell_id", cellId);
+    if (competitorId) params.set("competitor_id", competitorId);
+    const res = await fetch(`/api/v1/m4/insights?${params}`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
+  generateInsight: async (cellId: string, competitorId: string): Promise<Insight> => {
+    if (USE_MOCK) {
+      await new Promise(r => setTimeout(r, 2000));
+      return {
+        id: crypto.randomUUID(),
+        cell_id: cellId,
+        competitor_id: competitorId,
+        claim: "在权限配置场景下，Linear 在角色选择时实时展示权限清单（操作→即时反馈），使用户在授权决策前即可预览后果，显著降低误授权风险。",
+        analysis: `认知成本降低：用户无需在帮助文档和配置界面之间来回切换。决策成本降低：授权行为的后果在执行前可见，从"盲操作"变为"知情操作"。`,
+        recommendation: "在成员设置页面，角色下拉选择时右侧面板实时展示该角色的权限清单（可见/可编辑/可删除各项）。",
+        design_principle: "让不可逆的授权决策，在执行前所见即所得。适用于任何涉及权限/危险操作的配置流程。",
+        limits: "角色数 ≤ 6 时效果最佳；角色过多时清单过长反而增加认知负担，需考虑分组或折叠。",
+        source_observation_ids: [],
+        confidence: "medium",
+        generated_by: "mock",
+        is_draft: true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+    }
+    const res = await fetch("/api/v1/m4/insights/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cell_id: cellId, competitor_id: competitorId }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
+  updateInsight: async (insightId: string, data: Partial<Insight>): Promise<Insight> => {
+    if (USE_MOCK) {
+      await new Promise(r => setTimeout(r, 150));
+      return { id: insightId, ...data } as Insight;
+    }
+    const res = await fetch(`/api/v1/m4/insights/${insightId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error(await res.text());
     return res.json();
   },
 

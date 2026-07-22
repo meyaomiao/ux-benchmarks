@@ -330,7 +330,7 @@ class RelevanceScorer:
             f"{fidelity_line}\n\n"
             "Respond with ONLY a JSON object with keys state_match, "
             "product_match, version_recency, evidence_directness, fidelity, "
-            "reasoning."
+            "reasoning. 请用中文回复 reasoning 字段。"
         )
 
         content: list[dict] = []

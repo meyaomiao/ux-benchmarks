@@ -128,6 +128,24 @@ export interface QueueItem {
   created_at: string;
 }
 
+// L3 · Insights
+export interface Insight {
+  id: string;
+  cell_id: string;
+  competitor_id: string;
+  claim: string;
+  analysis: string | null;
+  recommendation: string | null;
+  design_principle: string | null;
+  limits: string | null;
+  source_observation_ids: string[];
+  confidence: "high" | "medium" | "low" | "hypothesis";
+  generated_by: string;
+  is_draft: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 // M2 · Mapping cards
 export interface MappingCard {
   id: string;

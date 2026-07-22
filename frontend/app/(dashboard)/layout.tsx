@@ -10,6 +10,7 @@ const NAV = [
   { href: "/collect",  label: "采集监控",     module: "M3" },
   { href: "/review",   label: "素材审核",     module: "M4" },
   { href: "/coverage", label: "覆盖看板",     module: "M5" },
+  { href: "/insights", label: "洞察库",       module: "L3" },
 ];
 
 export default function DashboardLayout({
