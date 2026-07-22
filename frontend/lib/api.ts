@@ -195,8 +195,17 @@ export const api = {
   },
 
   // M3 · Collection queue
-  getQueueStatus: () =>
-    get<QueueItem[]>("/m3/queue", []),
+  // Backend returns {items, total}; unwrap to the array the UI expects.
+  getQueueStatus: async (): Promise<QueueItem[]> => {
+    if (USE_MOCK) {
+      await new Promise((r) => setTimeout(r, 150));
+      return [];
+    }
+    const res = await fetch(`${BASE}/m3/queue`);
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    return Array.isArray(data) ? data : (data.items ?? []);
+  },
 
   manualPin: async (cellId: string, competitorId: string): Promise<{ ok: boolean }> => {
     if (USE_MOCK) {
