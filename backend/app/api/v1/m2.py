@@ -1,14 +1,36 @@
 from uuid import UUID
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.core.database import get_db
+from app.models.m1_grid import GridCell
 from app.schemas.m2 import (
     MappingCardCreate, MappingCardUpdate, MappingCardRead, MappingCardListResponse,
 )
 from app.services.m2_mapping import mapping_service
+from app.services.m2_mapping.card_generation_service import generate_card_draft
 from app.core.errors import AppError
 
 router = APIRouter(prefix="/m2", tags=["M2 · Mapping Cards"])
+
+
+@router.post("/mapping-cards/generate")
+async def generate_mapping_card(data: dict, db: Session = Depends(get_db)):
+    """AI-draft a mapping card from a grid cell's coordinates.
+
+    Body: {"cell_id": "uuid"}. Returns a draft (not persisted) that the user
+    reviews and saves via the normal create/update endpoints.
+    """
+    try:
+        cell_id = UUID(str(data.get("cell_id", "")))
+    except (ValueError, AttributeError):
+        raise AppError("BAD_REQUEST", "cell_id must be a valid UUID", 400)
+
+    cell = db.execute(select(GridCell).where(GridCell.id == cell_id)).scalar_one_or_none()
+    if not cell:
+        raise AppError("CELL_NOT_FOUND", f"Grid cell {cell_id} not found", 404)
+
+    return generate_card_draft(cell.jtbd, cell.journey_stage, cell.page_state)
 
 
 @router.get("/mapping-cards", response_model=MappingCardListResponse)

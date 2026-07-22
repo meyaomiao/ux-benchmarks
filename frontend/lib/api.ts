@@ -291,6 +291,29 @@ export const api = {
     return res.json();
   },
 
+  // M2 · AI-draft a mapping card from the cell's coordinates (#35)
+  generateMappingCard: async (cellId: string): Promise<{
+    intent_definition: string;
+    inclusion_criteria: string;
+    exclusion_criteria: string;
+  }> => {
+    if (USE_MOCK) {
+      await new Promise((r) => setTimeout(r, 1500));
+      return {
+        intent_definition: "为新成员分配访问权限时，逐条查看每个角色能做什么",
+        inclusion_criteria: "展示角色选择界面、权限清单、成员邀请弹窗中的角色预览；能看到角色与具体权限的对应关系",
+        exclusion_criteria: "纯计费/定价页；只提到权限管理但不展示界面的营销文案；与权限无关的功能介绍",
+      };
+    }
+    const res = await fetch(`${BASE}/m2/mapping-cards/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cell_id: cellId }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
   // L3 · Insights
   listInsights: async (cellId?: string, competitorId?: string): Promise<Insight[]> => {
     if (USE_MOCK) {

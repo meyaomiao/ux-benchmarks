@@ -23,7 +23,24 @@ export function MappingCardEditor({ cellId, cellLabel, onClose }: Props) {
   const [exclusion, setExclusion] = useState("");
 
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  async function handleGenerate() {
+    setGenerating(true);
+    setGenError(null);
+    try {
+      const draft = await api.generateMappingCard(cellId);
+      setIntent(draft.intent_definition.slice(0, MAX_INTENT));
+      setInclusion(draft.inclusion_criteria ?? "");
+      setExclusion(draft.exclusion_criteria ?? "");
+    } catch (e) {
+      setGenError(e instanceof Error ? e.message : "AI 生成失败");
+    } finally {
+      setGenerating(false);
+    }
+  }
 
   useEffect(() => {
     api.getMappingCard(cellId).then((existing) => {
@@ -101,6 +118,21 @@ export function MappingCardEditor({ cellId, cellLabel, onClose }: Props) {
           </div>
         ) : (
           <div className="p-5 space-y-4">
+            {/* AI generate — draft all fields from the cell coordinates */}
+            <div className="flex items-center justify-between gap-3 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2.5">
+              <span className="text-xs text-indigo-700">
+                不想手写？让 AI 根据格子坐标生成草稿，你再微调
+              </span>
+              <button
+                onClick={handleGenerate}
+                disabled={generating}
+                className="flex-none text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+              >
+                {generating ? "AI 生成中…" : "✨ AI 生成草稿"}
+              </button>
+            </div>
+            {genError && <p className="text-xs text-red-500 -mt-2">{genError}</p>}
+
             {/* Intent */}
             <div>
               <div className="flex items-center justify-between mb-1">
