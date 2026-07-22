@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
+import { EvidenceDrawer } from "@/components/coverage/evidence-drawer";
 import type { GridCell, Competitor, CoverageRow, CoverageStatus } from "@/lib/types";
 
 // Status display config
@@ -27,6 +28,10 @@ export default function CoveragePage() {
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [coverage, setCoverage] = useState<CoverageRow[]>([]);
   const [loading, setLoading] = useState(true);
+  // Selected cell×competitor for the evidence drawer.
+  const [selected, setSelected] = useState<{
+    cellId: string; competitorId: string; cellLabel: string; competitorLabel: string;
+  } | null>(null);
 
   useEffect(() => {
     Promise.all([api.listCells(), api.listCompetitors(), api.getCoverage()])
@@ -121,12 +126,24 @@ export default function CoveragePage() {
                       const confidencePct = row ? Math.round(row.coverage_confidence * 100) : 0;
                       return (
                         <td key={comp.id} className="px-0.5 py-0.5 align-top">
-                          <div className={[
-                            "rounded border p-2",
-                            cfg.cellBg, cfg.cellBorder,
-                            cfg.dashed ? "border-dashed" : "",
-                            cfg.pulse ? "animate-pulse" : "",
-                          ].join(" ")}>
+                          <div
+                            className={[
+                              "rounded border p-2 transition-all",
+                              cfg.cellBg, cfg.cellBorder,
+                              cfg.dashed ? "border-dashed" : "",
+                              cfg.pulse ? "animate-pulse" : "",
+                              row ? "cursor-pointer hover:ring-2 hover:ring-indigo-400 hover:ring-offset-1" : "",
+                            ].join(" ")}
+                            onClick={() => {
+                              if (!row) return;
+                              setSelected({
+                                cellId: cell.id,
+                                competitorId: comp.id,
+                                cellLabel: `${cell.page_state} · ${cell.journey_stage}`,
+                                competitorLabel: comp.canonical_name,
+                              });
+                            }}
+                          >
                             {row ? (
                               <>
                                 <div className="flex justify-center">
@@ -170,6 +187,17 @@ export default function CoveragePage() {
             </div>
           </div>
         </>
+      )}
+
+      {/* Evidence drawer — slides in when a cell is clicked */}
+      {selected && (
+        <EvidenceDrawer
+          cellId={selected.cellId}
+          competitorId={selected.competitorId}
+          cellLabel={selected.cellLabel}
+          competitorLabel={selected.competitorLabel}
+          onClose={() => setSelected(null)}
+        />
       )}
     </div>
   );

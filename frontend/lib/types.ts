@@ -81,3 +81,38 @@ export interface CoverageRow {
   evidence_type_breakdown: Record<string, number>;
   tier: string;
 }
+
+// M4 · Shortlist (evidence awaiting review)
+export type EvidenceType = "observed" | "claimed" | "inferred";
+
+export interface RubricBreakdown {
+  state_match: number;
+  product_match: number;
+  version_recency: number;
+  evidence_directness: number;
+  fidelity: number;
+  reasoning?: string;
+  scored_by?: string;
+}
+
+export interface ShortlistItem {
+  id: string;
+  cell_id: string;
+  competitor_id: string;
+  source_url: string;
+  source_type: string | null;
+  title: string | null;
+  snippet: string | null;
+  evidence_type: EvidenceType;
+  ai_score: number | null; // 0–1 overall relevance
+  ai_score_breakdown: RubricBreakdown | null;
+  rights_status: string;
+  media_disposition: string;
+  captured_at: string;
+  image_path_available: boolean;
+}
+
+export interface ShortlistResponse {
+  items: ShortlistItem[];
+  total: number;
+}
