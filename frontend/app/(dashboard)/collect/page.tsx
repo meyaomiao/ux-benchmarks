@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import type { GridCell, Competitor, QueueItem } from "@/lib/types";
 
 export default function CollectPage() {
+  const router = useRouter();
   const [cells, setCells] = useState<GridCell[]>([]);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -85,6 +87,25 @@ export default function CollectPage() {
       <p className="text-gray-500 text-sm mb-5 max-w-2xl">
         管理证据采集队列，监控各格子的采集进度。
       </p>
+
+      {/* Next-step banner — appears once there is evidence awaiting review */}
+      {!loading && (() => {
+        const readyCount = Number((metrics as any)?.coverage?.shortlist_ready ?? 0);
+        if (readyCount <= 0) return null;
+        return (
+          <div className="mb-5 flex items-center justify-between gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+            <span className="text-sm text-amber-800">
+              有 <span className="font-semibold">{readyCount}</span> 个格子采集到证据，等待人工审核
+            </span>
+            <button
+              onClick={() => router.push("/review")}
+              className="flex-none text-sm px-4 py-2 rounded-lg bg-amber-600 text-white hover:bg-amber-700 transition-colors font-medium"
+            >
+              下一步：审核证据 →
+            </button>
+          </div>
+        );
+      })()}
 
       {/* Metrics strip (#29) */}
       {metrics && !loading && (() => {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import type { GridCell, Competitor, Insight } from "@/lib/types";
 
@@ -225,6 +226,7 @@ function InsightCard({ insight, competitorLabel, cellLabel, onSave }: InsightCar
 // ---- Page ------------------------------------------------------------------
 
 export default function InsightsPage() {
+  const searchParams = useSearchParams();
   const [cells, setCells] = useState<GridCell[]>([]);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [insights, setInsights] = useState<Insight[]>([]);
@@ -237,17 +239,25 @@ export default function InsightsPage() {
   const [genError, setGenError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Carry cell+competitor from the review step: /insights?cell_id=…&competitor_id=…
+    // preselects the generate form so the user can generate immediately.
+    const paramCell = searchParams.get("cell_id");
+    const paramComp = searchParams.get("competitor_id");
     Promise.all([api.listCells(), api.listCompetitors(), api.listInsights()])
       .then(([g, c, ins]) => {
         setCells(g.items);
         const confirmed = c.items.filter((x) => x.status === "confirmed");
         setCompetitors(confirmed);
         setInsights(ins);
-        if (g.items.length > 0) setGenCellId(g.items[0].id);
-        if (confirmed.length > 0) setGenCompetitorId(confirmed[0].id);
+        const cellExists = g.items.some((x) => x.id === paramCell);
+        const compExists = confirmed.some((x) => x.id === paramComp);
+        if (paramCell && cellExists) setGenCellId(paramCell);
+        else if (g.items.length > 0) setGenCellId(g.items[0].id);
+        if (paramComp && compExists) setGenCompetitorId(paramComp);
+        else if (confirmed.length > 0) setGenCompetitorId(confirmed[0].id);
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [searchParams]);
 
   const cellMap = cells.reduce<Record<string, GridCell>>(
     (acc, c) => { acc[c.id] = c; return acc; },
@@ -298,7 +308,17 @@ export default function InsightsPage() {
   }
   return (
     <div>
-      <div className="text-gray-500 text-xs mb-1">L3 · 洞察库</div>
+      <div className="flex items-start justify-between mb-1">
+        <div className="text-gray-500 text-xs">L3 · 洞察库</div>
+        {insights.length > 0 && (
+          <a
+            href="/reports"
+            className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors font-medium"
+          >
+            下一步：重组报告 →
+          </a>
+        )}
+      </div>
       <h1 className="text-xl font-bold mb-1">洞察库</h1>
       <p className="text-gray-500 text-sm mb-8 max-w-2xl">
         从证据中提炼的设计洞察，可迁移到内部产品

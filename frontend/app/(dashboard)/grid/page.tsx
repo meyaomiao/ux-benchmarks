@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import type { GridCell, Competitor } from "@/lib/types";
@@ -15,6 +15,7 @@ const PLACEHOLDER = "c-empty";
 
 export default function GridPage() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const [cells, setCells] = useState<GridCell[]>([]);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [loading, setLoading] = useState(true);
@@ -75,6 +76,21 @@ export default function GridPage() {
         网格是采集的靶子。每个格子是一个可寻址的场景单元，产品向坐标看齐（而非反过来）。
         下方矩阵的列是竞品，格子的证据充分度由 M5 覆盖看板填充。
       </p>
+
+      {!loading && cells.length > 0 && (
+        <div className="mb-6 flex items-center justify-between gap-3 bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3">
+          <span className="text-sm text-indigo-800">
+            网格已有 <span className="font-semibold">{cells.length}</span> 个场景格子，
+            {competitors.length > 0 ? `${competitors.length} 个竞品待采集` : "去注册竞品后即可采集"}
+          </span>
+          <button
+            onClick={() => router.push("/collect")}
+            className="flex-none text-sm px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors font-medium"
+          >
+            下一步：采集证据 →
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="p-8 text-center text-gray-400 text-sm">加载中…</div>

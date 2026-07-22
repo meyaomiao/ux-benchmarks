@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { EvidenceDrawer } from "@/components/coverage/evidence-drawer";
 import type { GridCell, Competitor, CoverageRow } from "@/lib/types";
@@ -13,6 +14,7 @@ interface SelectedCell {
 }
 
 export default function ReviewPage() {
+  const router = useRouter();
   const [cells, setCells] = useState<GridCell[]>([]);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [coverage, setCoverage] = useState<CoverageRow[]>([]);
@@ -45,6 +47,8 @@ export default function ReviewPage() {
     .slice()
     .sort((a, b) => b.coverage_confidence - a.coverage_confidence);
   const partialCount = coverage.filter((r) => r.status === "PARTIAL").length;
+  // Cells whose evidence has been accepted (SATURATED) are ready for insight generation.
+  const saturatedRows = coverage.filter((r) => r.status === "SATURATED");
 
   function getCellLabel(cellId: string): string {
     const cell = cellMap[cellId];
@@ -79,6 +83,24 @@ export default function ReviewPage() {
               <div className="text-xs text-gray-500 mt-1">已有部分证据</div>
             </div>
           </div>
+
+          {/* Next-step banner — appears once some evidence is accepted */}
+          {saturatedRows.length > 0 && (
+            <div className="mb-6 flex items-center justify-between gap-3 bg-green-50 border border-green-200 rounded-xl px-4 py-3">
+              <span className="text-sm text-green-800">
+                已有 <span className="font-semibold">{saturatedRows.length}</span> 个格子通过审核，可以生成洞察了
+              </span>
+              <button
+                onClick={() => {
+                  const r = saturatedRows[0];
+                  router.push(`/insights?cell_id=${r.cell_id}&competitor_id=${r.competitor_id}`);
+                }}
+                className="flex-none text-sm px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors font-medium"
+              >
+                下一步：生成洞察 →
+              </button>
+            </div>
+          )}
 
           {/* Review list */}
           {shortlistRows.length === 0 ? (
