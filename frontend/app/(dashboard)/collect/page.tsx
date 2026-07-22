@@ -14,16 +14,19 @@ export default function CollectPage() {
   const [pinStatus, setPinStatus] = useState<"idle" | "loading" | "ok" | "err">("idle");
   const [pinErr, setPinErr] = useState("");
 
+  const [metrics, setMetrics] = useState<Record<string, unknown> | null>(null);
+
   const loadQueue = () =>
     api.getQueueStatus().then((items) => setQueue(items));
 
   useEffect(() => {
-    Promise.all([api.listCells(), api.listCompetitors(), api.getQueueStatus()])
-      .then(([g, c, q]) => {
+    Promise.all([api.listCells(), api.listCompetitors(), api.getQueueStatus(), api.getCoverageMetrics()])
+      .then(([g, c, q, m]) => {
         setCells(g.items);
         const confirmed = c.items.filter((x) => x.status === "confirmed");
         setCompetitors(confirmed);
         setQueue(q);
+        setMetrics(m);
         if (g.items[0]) setPinCell(g.items[0].id);
         if (confirmed[0]) setPinComp(confirmed[0].id);
       })
@@ -51,9 +54,42 @@ export default function CollectPage() {
     <div>
       <div className="text-gray-500 text-xs mb-1">M3 · 采集监控</div>
       <h1 className="text-xl font-bold mb-1">采集监控</h1>
-      <p className="text-gray-500 text-sm mb-6 max-w-2xl">
+      <p className="text-gray-500 text-sm mb-5 max-w-2xl">
         管理证据采集队列，监控各格子的采集进度。
       </p>
+
+      {/* Metrics strip (#29) */}
+      {metrics && !loading && (() => {
+        const p = (metrics as any).pipeline ?? {};
+        const cov = (metrics as any).coverage ?? {};
+        const adoptionPct = p.adoption_rate != null ? Math.round(p.adoption_rate * 100) : null;
+        const healthy = p.adoption_rate_healthy;
+        return (
+          <div className="grid grid-cols-3 gap-3 mb-5">
+            <div className="bg-white border border-gray-200 rounded-xl p-4">
+              <div className={`text-2xl font-bold ${adoptionPct != null ? (healthy ? "text-green-600" : "text-amber-600") : "text-gray-400"}`}>
+                {adoptionPct != null ? `${adoptionPct}%` : "—"}
+              </div>
+              <div className="text-xs text-gray-500 mt-1">
+                Shortlist 采纳率
+                {adoptionPct != null && (
+                  <span className={`ml-1 font-medium ${healthy ? "text-green-600" : "text-amber-600"}`}>
+                    {healthy ? "✓ 健康" : "⚠ 偏低"}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="bg-white border border-gray-200 rounded-xl p-4">
+              <div className="text-2xl font-bold text-indigo-600">{cov.shortlist_ready ?? 0}</div>
+              <div className="text-xs text-gray-500 mt-1">待审核格子（SHORTLIST_READY）</div>
+            </div>
+            <div className="bg-white border border-gray-200 rounded-xl p-4">
+              <div className="text-2xl font-bold text-green-600">{cov.saturated ?? 0}</div>
+              <div className="text-xs text-gray-500 mt-1">已饱和格子（SATURATED）</div>
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 text-sm text-amber-800">
         采集引擎在后台 Celery worker 中运行。开发环境开启 mock 模式时采集会立即返回模拟数据；

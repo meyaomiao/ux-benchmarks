@@ -145,6 +145,27 @@ export const api = {
     return res.json();
   },
 
+  // M5 · Metrics + reports (#29 #30)
+  getCoverageMetrics: () =>
+    get<Record<string, unknown>>("/m5/metrics", {
+      pipeline: { total_assets_in_shortlist: 0, total_accepted: 0, total_rejected: 0, adoption_rate: null, adoption_rate_healthy: false },
+      coverage: { total_cell_competitor_pairs: 0, shortlist_ready: 0, saturated: 0, by_status: {}, avg_confidence: 0 },
+    }),
+
+  generateReport: async () => {
+    if (USE_MOCK) { await new Promise(r => setTimeout(r, 300)); return { generated_at: new Date().toISOString(), note: "mock" }; }
+    const res = await fetch(`${BASE}/m5/reports/generate`, { method: "POST" });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
+  downloadReport: async () => {
+    if (USE_MOCK) return "# UX Coverage Report\n\nMock mode — no real data.";
+    const res = await fetch(`${BASE}/m5/reports/export.md`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.text();
+  },
+
   // M2 · Mapping cards
   getMappingCard: async (cellId: string): Promise<MappingCard | null> => {
     if (USE_MOCK) {

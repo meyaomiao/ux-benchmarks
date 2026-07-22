@@ -44,13 +44,36 @@ async def recompute_coverage_endpoint(
     return get_cell_coverage(db, cell_id, competitor_id) or {"status": snapshot.status}
 
 
-# --- Reports (#30, not yet implemented) ----------------------------------
+# --- Reports + Metrics (#29 #30) -------------------------------------------
+
+from app.services.m5_coverage.metrics_service import get_pipeline_metrics  # noqa: E402
+from app.services.m5_coverage.report_service import (  # noqa: E402
+    generate_coverage_report,
+    report_to_markdown,
+)
+from fastapi.responses import PlainTextResponse  # noqa: E402
+
+
+@router.get("/metrics")
+async def coverage_metrics(db: Session = Depends(get_db)):
+    """Pipeline health metrics: adoption rate, coverage confidence, status counts."""
+    return get_pipeline_metrics(db)
+
 
 @router.get("/reports")
 async def list_reports():
-    raise HTTPException(status_code=501, detail="Not implemented — see issue #30")
+    """Placeholder — report history not yet implemented."""
+    return []
 
 
 @router.post("/reports/generate")
-async def generate_report():
-    raise HTTPException(status_code=501, detail="Not implemented — see issue #30")
+async def generate_report(db: Session = Depends(get_db)):
+    """Generate a structured coverage report (JSON + Markdown)."""
+    return generate_coverage_report(db)
+
+
+@router.get("/reports/export.md", response_class=PlainTextResponse)
+async def export_report_markdown(db: Session = Depends(get_db)):
+    """Download the coverage report as Markdown."""
+    report = generate_coverage_report(db)
+    return report_to_markdown(report)

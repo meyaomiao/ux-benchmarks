@@ -63,7 +63,24 @@ export default function CoveragePage() {
   return (
     <div>
       <div className="text-gray-500 text-xs mb-1">M5 · 覆盖看板</div>
-      <h1 className="text-xl font-bold mb-1">覆盖矩阵</h1>
+      <div className="flex items-center justify-between mb-1">
+        <h1 className="text-xl font-bold">覆盖矩阵</h1>
+        <button
+          onClick={async () => {
+            try {
+              const md = await api.downloadReport();
+              const blob = new Blob([md], { type: "text/markdown" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url; a.download = "coverage-report.md"; a.click();
+              URL.revokeObjectURL(url);
+            } catch (e) { alert("导出失败: " + (e instanceof Error ? e.message : e)); }
+          }}
+          className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg text-gray-500 hover:bg-gray-50 transition-colors"
+        >
+          ↓ 导出报告
+        </button>
+      </div>
       <p className="text-gray-500 text-sm mb-6 max-w-2xl">
         每格展示当前采集状态与置信度。SHORTLIST_READY 意味着已找到证据，等待人工审核；SATURATED 意味着已通过人工接受。
       </p>
