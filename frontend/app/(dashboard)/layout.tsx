@@ -6,11 +6,10 @@ import { cn } from "@/lib/utils";
 
 const NAV = [
   { href: "/registry", label: "产品实体注册", module: "M0" },
-  { href: "/grid", label: "场景网格", module: "M1" },
-  { href: "/mapping", label: "映射卡", module: "M2", disabled: true },
-  { href: "/collect", label: "采集监控", module: "M3", disabled: true },
-  { href: "/review", label: "素材审核", module: "M4", disabled: true },
-  { href: "/coverage", label: "覆盖看板", module: "M5", disabled: true },
+  { href: "/grid",     label: "场景网格",     module: "M1" },
+  { href: "/collect",  label: "采集监控",     module: "M3" },
+  { href: "/review",   label: "素材审核",     module: "M4" },
+  { href: "/coverage", label: "覆盖看板",     module: "M5" },
 ];
 
 export default function DashboardLayout({
@@ -34,20 +33,6 @@ export default function DashboardLayout({
         </div>
         {NAV.map((item) => {
           const active = pathname === item.href;
-          if (item.disabled) {
-            return (
-              <div
-                key={item.href}
-                className="flex items-center gap-2 px-2.5 py-2 rounded-md text-[#4b525e] text-[13px] cursor-not-allowed"
-                title="即将上线"
-              >
-                <span className="w-5 h-5 rounded bg-[#1c202a] grid place-items-center text-[10px] flex-none">
-                  {item.module}
-                </span>
-                {item.label}
-              </div>
-            );
-          }
           return (
             <Link
               key={item.href}

@@ -1,7 +1,7 @@
 // API client. Falls back to mock data when NEXT_PUBLIC_USE_MOCK !== "false".
 // Backend endpoints mirror docs/collection-phase-spec-v2.md (M0 / M1).
 
-import type { Competitor, LexiconEntry, GridCell, ListResponse, CoverageRow, ShortlistResponse, MappingCard } from "./types";
+import type { Competitor, LexiconEntry, GridCell, ListResponse, CoverageRow, ShortlistResponse, MappingCard, QueueItem } from "./types";
 import { mockCompetitors, mockLexicon, mockCells, mockCoverage, mockShortlist, mockMappingCards } from "./mock";
 
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK !== "false";
@@ -125,6 +125,24 @@ export const api = {
     });
     if (!res.ok) throw new Error(await res.text());
     return res.json() as Promise<GridGenerationResult>;
+  },
+
+  // M3 · Collection queue
+  getQueueStatus: () =>
+    get<QueueItem[]>("/m3/queue", []),
+
+  manualPin: async (cellId: string, competitorId: string): Promise<{ ok: boolean }> => {
+    if (USE_MOCK) {
+      await new Promise((r) => setTimeout(r, 200));
+      return { ok: true };
+    }
+    const res = await fetch(`${BASE}/m3/queue/pin`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cell_id: cellId, competitor_id: competitorId }),
+    });
+    if (!res.ok) throw new Error(`manualPin failed: ${res.status}`);
+    return res.json();
   },
 
   // M2 · Mapping cards

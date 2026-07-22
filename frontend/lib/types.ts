@@ -117,6 +117,17 @@ export interface ShortlistResponse {
   total: number;
 }
 
+// M3 · Queue
+export interface QueueItem {
+  id: string;
+  cell_id: string;
+  competitor_id: string;
+  status: string;
+  probe_cycles: number;
+  last_probed_at?: string | null;
+  created_at: string;
+}
+
 // M2 · Mapping cards
 export interface MappingCard {
   id: string;
