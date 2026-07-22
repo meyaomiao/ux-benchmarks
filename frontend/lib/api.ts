@@ -1,7 +1,7 @@
 // API client. Falls back to mock data when NEXT_PUBLIC_USE_MOCK !== "false".
 // Backend endpoints mirror docs/collection-phase-spec-v2.md (M0 / M1).
 
-import type { Competitor, LexiconEntry, GridCell, ListResponse, CoverageRow, ShortlistResponse, MappingCard, QueueItem, Insight, Report, ReportAudience, ReportFormat } from "./types";
+import type { Competitor, LexiconEntry, GridCell, ListResponse, CoverageRow, ShortlistResponse, MappingCard, QueueItem, Insight, Report, ReportAudience, ReportFormat, DiscoverySuggestion } from "./types";
 import { mockCompetitors, mockLexicon, mockCells, mockCoverage, mockShortlist, mockMappingCards, mockReports, mockReportBody, mockInsights } from "./mock";
 
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK !== "false";
@@ -31,6 +31,33 @@ export const api = {
   // M0 · Competitors
   listCompetitors: () =>
     get<ListResponse<Competitor>>("/m0/competitors", paginate(mockCompetitors)),
+
+  // M0 · Competitor auto-discovery (B)
+  discoverCompetitors: async (
+    category: string,
+    knownProducts: string[] = [],
+  ): Promise<DiscoverySuggestion[]> => {
+    if (USE_MOCK) {
+      await new Promise(r => setTimeout(r, 2000));
+      const knownLower = new Set(knownProducts.map(p => p.toLowerCase()));
+      const allMock: DiscoverySuggestion[] = [
+        { name: "Linear", tier: "direct", tier_label: "直接竞品", rationale: "任务追踪场景以极简交互著称，键盘优先和状态机设计是业内标杆，特别值得借鉴其权限分配和项目切换的交互模式。", official_domain: "linear.app", help_center_domain: "linear.app/docs" },
+        { name: "Notion", tier: "direct", tier_label: "直接竞品", rationale: "Block 编辑器的可组合性和 Database 视图切换极具参考价值，在权限管理和模板系统上有独特设计思路。", official_domain: "notion.so", help_center_domain: "notion.so/help" },
+        { name: "Figma", tier: "indirect", tier_label: "间接竞品", rationale: "实时协作、评论与版本管理的交互模式与项目管理高度重叠，多人同时编辑状态的处理方式值得参考。", official_domain: "figma.com", help_center_domain: "help.figma.com" },
+        { name: "GitHub", tier: "indirect", tier_label: "间接竞品", rationale: "Issue/PR 工作流解决了与项目追踪高度相似的任务管理问题，状态流转和通知设计是成熟的工程实践。", official_domain: "github.com", help_center_domain: "docs.github.com" },
+        { name: "Stripe Dashboard", tier: "cross_industry", tier_label: "跨行业标杆", rationale: "金融工具在「复杂数据可读性」和「不可逆操作确认」上有极高设计要求，空状态引导和风险操作二次确认值得跨行业借鉴。", official_domain: "stripe.com", help_center_domain: "stripe.com/docs" },
+        { name: "Vercel", tier: "cross_industry", tier_label: "跨行业标杆", rationale: "DevOps 工具在「任务进度可视化」和「配置→部署→观测」全链路体验上有独到设计，Deployment 状态机是同类场景参考标杆。", official_domain: "vercel.com", help_center_domain: "vercel.com/docs" },
+      ];
+      return allMock.filter(s => !knownLower.has(s.name.toLowerCase()));
+    }
+    const res = await fetch(`${BASE}/m0/discover`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ category, known_products: knownProducts }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
 
   // M0 · Lexicon
   listLexicon: () =>

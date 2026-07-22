@@ -23,12 +23,14 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.services.m2_mapping.mapping_service import get_mapping_card_by_cell
 from app.services.m3_collection.adapters.help_docs import HelpDocsAdapter
 from app.services.m3_collection.adapters.interactive_demo import InteractiveDemoAdapter
 from app.services.m3_collection.contracts import Adapter, Candidate, Score, Scorer
 from app.services.m3_collection.query_expansion import build_query_bundle
 from app.services.m3_collection.scoring.relevance_scorer import RelevanceScorer
+from app.services.m3_collection.search_service import resolve_queries_to_urls
 
 
 @dataclass
@@ -79,9 +81,14 @@ def run_probe_pipeline(
     bundle = build_query_bundle(db, cell_id, competitor_id)
 
     # 2. Run all adapters; route each to the right query bucket.
+    #    In live mode, resolve query strings to real URLs via the search service
+    #    before passing to adapters (which expect http(s) URLs in live mode).
     all_candidates: list[Candidate] = []
     for adp in _adapters:
         queries = getattr(bundle, adp.source_type.value, []) or bundle.generic
+        if not settings.use_collection_mock:
+            # Resolve search-operator strings (e.g. "site:help.* setup") to URLs.
+            queries = resolve_queries_to_urls(queries, max_total=per_bucket_limit * 2)
         try:
             found = adp.fetch(cell_id, competitor_id, queries, limit=per_bucket_limit)
             all_candidates.extend(found)

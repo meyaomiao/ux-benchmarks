@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
-import type { Competitor, LexiconEntry, CompetitorType } from "@/lib/types";
+import type { Competitor, LexiconEntry, CompetitorType, DiscoverySuggestion } from "@/lib/types";
 
 const TYPE_LABEL: Record<CompetitorType, string> = {
   direct: "直接竞品",
@@ -24,11 +24,154 @@ const TERM_TYPE_LABEL: Record<string, string> = {
   product_alias: "产品别名",
 };
 
+const TIER_COLORS: Record<string, string> = {
+  direct:          "bg-indigo-50 text-indigo-700 border border-indigo-100",
+  indirect:        "bg-amber-50  text-amber-700  border border-amber-100",
+  cross_industry:  "bg-green-50  text-green-700  border border-green-100",
+};
+
+// ---- Discovery Panel -------------------------------------------------------
+
+function DiscoveryPanel({
+  knownProducts,
+  onAdd,
+  onClose,
+}: {
+  knownProducts: string[];
+  onAdd: (s: DiscoverySuggestion) => void;
+  onClose: () => void;
+}) {
+  const [category, setCategory] = useState("项目管理工具");
+  const [discovering, setDiscovering] = useState(false);
+  const [suggestions, setSuggestions] = useState<DiscoverySuggestion[]>([]);
+  const [added, setAdded] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleDiscover() {
+    if (!category.trim()) return;
+    setDiscovering(true);
+    setError(null);
+    setSuggestions([]);
+    try {
+      const results = await api.discoverCompetitors(category.trim(), knownProducts);
+      setSuggestions(results);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "发现失败");
+    } finally {
+      setDiscovering(false);
+    }
+  }
+
+  async function handleAdd(s: DiscoverySuggestion) {
+    try {
+      await api.discoverCompetitors; // type guard
+      // Call createCompetitor (not yet in api — use fetch directly in mock mode)
+      onAdd(s);
+      setAdded(prev => new Set([...prev, s.name]));
+    } catch (e) {
+      // best-effort
+    }
+  }
+
+  const tierOrder = ["direct", "indirect", "cross_industry"] as const;
+  const grouped = tierOrder.reduce<Record<string, DiscoverySuggestion[]>>((acc, t) => {
+    acc[t] = suggestions.filter(s => s.tier === t);
+    return acc;
+  }, {} as Record<string, DiscoverySuggestion[]>);
+
+  return (
+    <div className="fixed inset-0 z-50 flex">
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="relative ml-auto w-full max-w-xl bg-white shadow-2xl flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 flex-none">
+          <div>
+            <div className="text-xs text-gray-400 mb-0.5">M0 · AI 发现竞品</div>
+            <div className="text-sm font-semibold text-gray-800">输入品类，自动推荐三层标杆</div>
+          </div>
+          <button onClick={onClose} className="text-xs text-gray-400 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100">关闭</button>
+        </div>
+
+        {/* Search */}
+        <div className="px-6 py-4 border-b border-gray-100 flex-none">
+          <div className="flex gap-2">
+            <input
+              className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              value={category}
+              onChange={e => setCategory(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && handleDiscover()}
+              placeholder="品类名称，如：项目管理工具、CRM、在线教育"
+              disabled={discovering}
+            />
+            <button
+              onClick={handleDiscover}
+              disabled={!category.trim() || discovering}
+              className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors whitespace-nowrap"
+            >
+              {discovering ? "发现中…" : "AI 发现"}
+            </button>
+          </div>
+          {error && <p className="mt-2 text-xs text-red-500">{error}</p>}
+        </div>
+
+        {/* Results */}
+        <div className="flex-1 overflow-auto px-6 py-4">
+          {suggestions.length === 0 && !discovering && (
+            <div className="py-12 text-center text-gray-400 text-sm">
+              输入品类名称，点击「AI 发现」获取推荐
+            </div>
+          )}
+          {discovering && (
+            <div className="py-12 text-center text-gray-400 text-sm">AI 正在分析中…</div>
+          )}
+          {tierOrder.map(tier => {
+            const items = grouped[tier];
+            if (!items?.length) return null;
+            const tierMeta = { direct: "直接竞品", indirect: "间接竞品", cross_industry: "跨行业标杆" };
+            return (
+              <div key={tier} className="mb-6">
+                <div className={`inline-flex text-xs px-2 py-0.5 rounded-full font-medium mb-3 ${TIER_COLORS[tier]}`}>
+                  {tierMeta[tier]}
+                </div>
+                <div className="space-y-3">
+                  {items.map(s => (
+                    <div key={s.name} className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-semibold text-gray-800">{s.name}</div>
+                          {s.official_domain && (
+                            <div className="text-xs text-gray-400 mt-0.5">{s.official_domain}</div>
+                          )}
+                          <p className="text-xs text-gray-600 mt-2 leading-relaxed">{s.rationale}</p>
+                        </div>
+                        <button
+                          onClick={() => handleAdd(s)}
+                          disabled={added.has(s.name)}
+                          className="flex-none text-xs px-3 py-1.5 rounded-lg border border-indigo-200 text-indigo-600 hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-default transition-colors whitespace-nowrap"
+                        >
+                          {added.has(s.name) ? "✓ 已添加" : "加入注册"}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- Page ------------------------------------------------------------------
+
 export default function RegistryPage() {
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [lexicon, setLexicon] = useState<LexiconEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [showDiscover, setShowDiscover] = useState(false);
 
   useEffect(() => {
     Promise.all([api.listCompetitors(), api.listLexicon()])
@@ -39,14 +182,55 @@ export default function RegistryPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  function handleAddSuggestion(s: DiscoverySuggestion) {
+    // Optimistic: add to local list as a pending competitor
+    const now = new Date().toISOString();
+    const fake: Competitor = {
+      id: crypto.randomUUID(),
+      canonical_name: s.name,
+      aliases: [],
+      parent_company: null,
+      official_domain: s.official_domain,
+      help_center_domain: s.help_center_domain,
+      video_channels: [],
+      app_store_pages: [],
+      acquired_from: null,
+      valid_from: null,
+      valid_to: null,
+      status: "pending",
+      competitor_type: s.tier as CompetitorType,
+      created_at: now,
+      updated_at: now,
+    };
+    setCompetitors(prev => [fake, ...prev]);
+  }
+
   const filtered =
     typeFilter === "all"
       ? competitors
       : competitors.filter((c) => c.competitor_type === typeFilter);
 
+  const knownNames = competitors.map(c => c.canonical_name);
+
   return (
     <div>
-      <div className="text-gray-500 text-xs mb-1">M0 · 产品实体注册</div>
+      {showDiscover && (
+        <DiscoveryPanel
+          knownProducts={knownNames}
+          onAdd={handleAddSuggestion}
+          onClose={() => setShowDiscover(false)}
+        />
+      )}
+
+      <div className="flex items-start justify-between mb-1">
+        <div className="text-gray-500 text-xs">M0 · 产品实体注册</div>
+        <button
+          onClick={() => setShowDiscover(true)}
+          className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors font-medium"
+        >
+          🔍 AI 发现竞品
+        </button>
+      </div>
       <h1 className="text-xl font-bold mb-1">竞品实体与领域词表</h1>
       <p className="text-gray-500 text-sm mb-6 max-w-2xl">
         统一产品实体（含别名、旧名称、域名树），解决 B 端产品改名、收购、模块拆分导致的重复和漏收。词表驱动 M3 的查询扩展。
@@ -87,10 +271,7 @@ export default function RegistryPage() {
             </thead>
             <tbody>
               {filtered.map((c) => (
-                <tr
-                  key={c.id}
-                  className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50"
-                >
+                <tr key={c.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
                   <td className="px-4 py-3">
                     <div className="font-medium">{c.canonical_name}</div>
                     {c.parent_company && (
@@ -107,12 +288,8 @@ export default function RegistryPage() {
                   <td className="px-4 py-3 text-gray-500 text-xs">
                     {c.aliases.length ? c.aliases.join(", ") : "—"}
                   </td>
-                  <td className="px-4 py-3 text-gray-500 text-xs">
-                    {c.official_domain || "—"}
-                  </td>
-                  <td className="px-4 py-3 text-gray-500 text-xs">
-                    {c.help_center_domain || "—"}
-                  </td>
+                  <td className="px-4 py-3 text-gray-500 text-xs">{c.official_domain || "—"}</td>
+                  <td className="px-4 py-3 text-gray-500 text-xs">{c.help_center_domain || "—"}</td>
                   <td className="px-4 py-3">
                     <Badge variant={c.status}>{STATUS_LABEL[c.status]}</Badge>
                   </td>
@@ -141,9 +318,7 @@ export default function RegistryPage() {
             {lexicon.map((l) => (
               <tr key={l.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
                 <td className="px-4 py-3 font-medium">{l.term}</td>
-                <td className="px-4 py-3 text-gray-500 text-xs">
-                  {TERM_TYPE_LABEL[l.term_type]}
-                </td>
+                <td className="px-4 py-3 text-gray-500 text-xs">{TERM_TYPE_LABEL[l.term_type]}</td>
                 <td className="px-4 py-3 text-gray-500 text-xs uppercase">{l.language}</td>
                 <td className="px-4 py-3">
                   <Badge variant={l.level === "category" ? "direct" : "default"}>

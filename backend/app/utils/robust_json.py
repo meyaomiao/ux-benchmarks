@@ -74,6 +74,20 @@ def _escape_inner_quotes(s: str) -> str:
     return "".join(out)
 
 
+def _normalize_unicode_quotes(s: str) -> str:
+    """Replace Chinese/typographic quote chars with ASCII equivalents.
+
+    Claude occasionally uses U+201C/201D ("") or U+2018/2019 ('') as JSON string
+    delimiters instead of ASCII quotes, which makes json.loads choke with
+    'Expecting , delimiter'. Replace all of them before any other repair.
+    """
+    return (
+        s.replace("“", '"').replace("”", '"')  # "" → ""
+         .replace("‘", "'").replace("’", "'")  # '' → ''
+         .replace("＂", '"').replace("＇", "'")  # fullwidth versions
+    )
+
+
 def extract_json(raw: str) -> dict[str, Any]:
     """Best-effort parse of a JSON object from a model response.
 
@@ -81,6 +95,10 @@ def extract_json(raw: str) -> dict[str, Any]:
     """
     if raw is None:
         raise ValueError("empty model response")
+
+    # 0) normalise Chinese / typographic quotes first — they look like ASCII
+    #    but aren't, causing json.loads to report 'Expecting , delimiter'.
+    raw = _normalize_unicode_quotes(raw)
 
     # 1) straight parse
     try:

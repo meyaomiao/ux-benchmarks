@@ -146,6 +146,18 @@ export interface Insight {
   updated_at: string;
 }
 
+// M0 · Competitor discovery (B)
+export type DiscoveryTier = "direct" | "indirect" | "cross_industry";
+
+export interface DiscoverySuggestion {
+  name: string;
+  tier: DiscoveryTier;
+  tier_label: string;
+  rationale: string;
+  official_domain: string | null;
+  help_center_domain: string | null;
+}
+
 // L5 · Reports
 export type ReportAudience = "management" | "designer" | "pm";
 export type ReportFormat = "summary_5min" | "review_15min" | "onepager" | "full";

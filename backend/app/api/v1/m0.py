@@ -10,6 +10,7 @@ from app.services.m0_registry.competitor_service import (
     list_competitors, get_competitor, create_competitor, update_competitor
 )
 from app.services.m0_registry import lexicon_service
+from app.services.m0_registry.discovery_service import discover_competitors
 from app.core.errors import AppError
 
 router = APIRouter(prefix="/m0", tags=["M0 · Competitor Registry"])
@@ -92,3 +93,32 @@ async def update_lexicon_entry(
 @router.delete("/lexicon/{entry_id}", status_code=204)
 async def delete_lexicon_entry(entry_id: UUID, db: Session = Depends(get_db)):
     lexicon_service.delete_lexicon_entry(db, entry_id)
+
+
+# B · Competitor auto-discovery
+@router.post("/discover")
+async def discover_competitors_endpoint(
+    data: dict,
+    db: Session = Depends(get_db),
+):
+    """AI-powered competitor discovery.
+
+    Body: {"category": "项目管理工具", "known_products": ["Linear", "Notion"]}
+    Returns a list of DiscoverySuggestion objects grouped by tier.
+    """
+    category = (data.get("category") or "").strip()
+    if not category:
+        raise AppError("BAD_REQUEST", "category is required", 400)
+    known = data.get("known_products") or []
+    suggestions = discover_competitors(category, known)
+    return [
+        {
+            "name": s.name,
+            "tier": s.tier,
+            "tier_label": s.tier_label,
+            "rationale": s.rationale,
+            "official_domain": s.official_domain,
+            "help_center_domain": s.help_center_domain,
+        }
+        for s in suggestions
+    ]
