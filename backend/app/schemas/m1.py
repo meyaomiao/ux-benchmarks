@@ -52,3 +52,35 @@ class CellChangelogRead(BaseModel):
     change_note: Optional[str] = None
     previous_values: Optional[Any] = None
     created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# AI grid generation schemas
+# ---------------------------------------------------------------------------
+
+class GridGenerationRequest(BaseModel):
+    category: str = Field(
+        min_length=1, max_length=200,
+        description='产品品类或具体产品名称，如"项目管理工具"或"Linear"',
+    )
+    known_products: list[str] = Field(
+        default_factory=list,
+        description="可选：已知竞品名称，帮助 AI 聚焦",
+    )
+    language: str = Field(default="zh", description="返回语言 zh=中文 en=英文")
+
+
+class GeneratedCell(BaseModel):
+    jtbd: str
+    journey_stage: str
+    page_state: str
+    value_score: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class GridGenerationResponse(BaseModel):
+    category: str
+    jtbd_tasks: list[str]
+    journey_stages: list[str]
+    cells: list[GeneratedCell]
+    total: int
+    generated_by: str  # "claude" | "mock"
