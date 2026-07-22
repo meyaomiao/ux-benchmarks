@@ -35,6 +35,43 @@ export const api = {
   listCompetitors: () =>
     get<ListResponse<Competitor>>("/m0/competitors", paginate(mockCompetitors)),
 
+  createCompetitor: async (data: {
+    canonical_name: string;
+    competitor_type?: string | null;
+    official_domain?: string | null;
+    help_center_domain?: string | null;
+    status?: string;
+  }): Promise<Competitor> => {
+    if (USE_MOCK) {
+      await new Promise((r) => setTimeout(r, 150));
+      const now = new Date().toISOString();
+      return {
+        id: crypto.randomUUID(),
+        canonical_name: data.canonical_name,
+        aliases: [],
+        parent_company: null,
+        official_domain: data.official_domain ?? null,
+        help_center_domain: data.help_center_domain ?? null,
+        video_channels: [],
+        app_store_pages: [],
+        acquired_from: null,
+        valid_from: null,
+        valid_to: null,
+        status: (data.status as Competitor["status"]) ?? "confirmed",
+        competitor_type: (data.competitor_type as Competitor["competitor_type"]) ?? null,
+        created_at: now,
+        updated_at: now,
+      };
+    }
+    const res = await fetch(`${BASE}/m0/competitors`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
   // M0 · Competitor auto-discovery (B)
   discoverCompetitors: async (
     category: string,

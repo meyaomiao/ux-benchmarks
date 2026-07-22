@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import type { Competitor, LexiconEntry, CompetitorType, DiscoverySuggestion } from "@/lib/types";
@@ -36,10 +37,14 @@ function DiscoveryPanel({
   knownProducts,
   onAdd,
   onClose,
+  onGoToGrid,
+  onCategoryChange,
 }: {
   knownProducts: string[];
-  onAdd: (s: DiscoverySuggestion) => void;
+  onAdd: (s: DiscoverySuggestion) => Promise<void>;
   onClose: () => void;
+  onGoToGrid: () => void;
+  onCategoryChange: (category: string) => void;
 }) {
   const [category, setCategory] = useState("项目管理工具");
   const [discovering, setDiscovering] = useState(false);
@@ -55,6 +60,7 @@ function DiscoveryPanel({
     try {
       const results = await api.discoverCompetitors(category.trim(), knownProducts);
       setSuggestions(results);
+      onCategoryChange(category.trim());  // carry the category to the next step
     } catch (e) {
       setError(e instanceof Error ? e.message : "发现失败");
     } finally {
@@ -62,14 +68,22 @@ function DiscoveryPanel({
     }
   }
 
+  const [adding, setAdding] = useState<Set<string>>(new Set());
+
   async function handleAdd(s: DiscoverySuggestion) {
+    if (added.has(s.name) || adding.has(s.name)) return;
+    setAdding(prev => new Set([...prev, s.name]));
     try {
-      await api.discoverCompetitors; // type guard
-      // Call createCompetitor (not yet in api — use fetch directly in mock mode)
-      onAdd(s);
+      await onAdd(s);  // actually persists to the backend
       setAdded(prev => new Set([...prev, s.name]));
     } catch (e) {
-      // best-effort
+      setError(e instanceof Error ? `添加「${s.name}」失败：${e.message}` : "添加失败");
+    } finally {
+      setAdding(prev => {
+        const next = new Set(prev);
+        next.delete(s.name);
+        return next;
+      });
     }
   }
 
@@ -146,10 +160,10 @@ function DiscoveryPanel({
                         </div>
                         <button
                           onClick={() => handleAdd(s)}
-                          disabled={added.has(s.name)}
+                          disabled={added.has(s.name) || adding.has(s.name)}
                           className="flex-none text-xs px-3 py-1.5 rounded-lg border border-indigo-200 text-indigo-600 hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-default transition-colors whitespace-nowrap"
                         >
-                          {added.has(s.name) ? "✓ 已添加" : "加入注册"}
+                          {added.has(s.name) ? "✓ 已添加" : adding.has(s.name) ? "添加中…" : "加入注册"}
                         </button>
                       </div>
                     </div>
@@ -159,6 +173,21 @@ function DiscoveryPanel({
             );
           })}
         </div>
+
+        {/* Footer — next step */}
+        {added.size > 0 && (
+          <div className="flex-none border-t border-gray-200 px-6 py-4 flex items-center justify-between bg-gray-50">
+            <span className="text-xs text-gray-500">
+              已添加 <span className="font-semibold text-indigo-600">{added.size}</span> 个竞品到注册库
+            </span>
+            <button
+              onClick={onGoToGrid}
+              className="text-sm px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors font-medium"
+            >
+              下一步：生成场景网格 →
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -167,11 +196,13 @@ function DiscoveryPanel({
 // ---- Page ------------------------------------------------------------------
 
 export default function RegistryPage() {
+  const router = useRouter();
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [lexicon, setLexicon] = useState<LexiconEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [showDiscover, setShowDiscover] = useState(false);
+  const [discoverCategory, setDiscoverCategory] = useState("");
 
   useEffect(() => {
     Promise.all([api.listCompetitors(), api.listLexicon()])
@@ -182,27 +213,16 @@ export default function RegistryPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  function handleAddSuggestion(s: DiscoverySuggestion) {
-    // Optimistic: add to local list as a pending competitor
-    const now = new Date().toISOString();
-    const fake: Competitor = {
-      id: crypto.randomUUID(),
+  async function handleAddSuggestion(s: DiscoverySuggestion) {
+    // Actually persist to the backend, then reflect the real row in local state.
+    const created = await api.createCompetitor({
       canonical_name: s.name,
-      aliases: [],
-      parent_company: null,
+      competitor_type: s.tier,
       official_domain: s.official_domain,
       help_center_domain: s.help_center_domain,
-      video_channels: [],
-      app_store_pages: [],
-      acquired_from: null,
-      valid_from: null,
-      valid_to: null,
-      status: "pending",
-      competitor_type: s.tier as CompetitorType,
-      created_at: now,
-      updated_at: now,
-    };
-    setCompetitors(prev => [fake, ...prev]);
+      status: "confirmed",
+    });
+    setCompetitors(prev => [created, ...prev]);
   }
 
   const filtered =
@@ -219,6 +239,11 @@ export default function RegistryPage() {
           knownProducts={knownNames}
           onAdd={handleAddSuggestion}
           onClose={() => setShowDiscover(false)}
+          onCategoryChange={setDiscoverCategory}
+          onGoToGrid={() => {
+            const q = discoverCategory.trim();
+            router.push(q ? `/grid?category=${encodeURIComponent(q)}` : "/grid");
+          }}
         />
       )}
 

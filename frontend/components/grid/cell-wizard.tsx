@@ -10,12 +10,13 @@ type Phase = "input" | "review";
 interface Props {
   onDone: (newCells: GridCell[]) => void;
   onClose: () => void;
+  initialCategory?: string;
 }
 
-export default function CellWizard({ onDone, onClose }: Props) {
+export default function CellWizard({ onDone, onClose, initialCategory = "" }: Props) {
   /* ── Phase A state ─────────────────────────────────────────── */
   const [phase, setPhase] = useState<Phase>("input");
-  const [category, setCategory] = useState("");
+  const [category, setCategory] = useState(initialCategory);
   const [competitorInput, setCompetitorInput] = useState("");
   const [knownProducts, setKnownProducts] = useState<string[]>([]);
   const [generating, setGenerating] = useState(false);

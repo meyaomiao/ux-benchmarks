@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import type { GridCell, Competitor } from "@/lib/types";
@@ -13,11 +14,13 @@ import { mockMappingCards } from "@/lib/mock";
 const PLACEHOLDER = "c-empty";
 
 export default function GridPage() {
+  const searchParams = useSearchParams();
   const [cells, setCells] = useState<GridCell[]>([]);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [loading, setLoading] = useState(true);
   const [editorCell, setEditorCell] = useState<GridCell | null>(null);
   const [showWizard, setShowWizard] = useState(false);
+  const [wizardCategory, setWizardCategory] = useState("");
   const [quickAdd, setQuickAdd] = useState({ jtbd: "", journey_stage: "", page_state: "" });
   const [quickAddLoading, setQuickAddLoading] = useState(false);
 
@@ -29,6 +32,16 @@ export default function GridPage() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  // Carry the category from the registry discover step: /grid?category=…
+  // auto-opens the wizard with the category prefilled.
+  useEffect(() => {
+    const cat = searchParams.get("category");
+    if (cat) {
+      setWizardCategory(cat);
+      setShowWizard(true);
+    }
+  }, [searchParams]);
 
   const stages = Array.from(new Set(cells.map((c) => c.journey_stage)));
 
@@ -235,6 +248,7 @@ export default function GridPage() {
       {/* Grid initialization wizard */}
       {showWizard && (
         <CellWizard
+          initialCategory={wizardCategory}
           onDone={(newCells: GridCell[]) => {
             setCells((prev) => [...prev, ...newCells]);
             setShowWizard(false);
