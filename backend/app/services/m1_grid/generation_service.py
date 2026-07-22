@@ -41,19 +41,42 @@ _MOCK = GridGenerationResponse(
 
 
 def _prompt(req: GridGenerationRequest) -> str:
-    products_hint = ""
-    if req.known_products:
-        products_hint = f"\n已知代表性产品：{', '.join(req.known_products)}"
     lang = "中文" if req.language == "zh" else "English"
-    return f"""分析产品品类：{req.category}{products_hint}
+
+    if req.known_products:
+        # Grounded mode: derive JTBDs from what these products actually do,
+        # and CONVERGE — don't emit one JTBD per feature.
+        grounding = (
+            f"参考产品：{', '.join(req.known_products)}\n"
+            "基于这些产品的真实核心流程提炼 JTBD，聚焦它们在 UX 上有差异化、"
+            "最值得研究的场景。不要为每个功能都生成一个 JTBD——要收敛到少数"
+            "真正核心、且这些产品体验各有高下的任务。"
+        )
+    else:
+        # Category-only mode: force grounding on real products to avoid
+        # generic / hallucinated JTBDs.
+        grounding = (
+            "只给了品类、没有具体产品。请先在心里想出该品类最具代表性的 3-5 个"
+            "真实产品，基于它们的共性核心流程来提炼 JTBD——不要凭空臆测或罗列"
+            "边缘任务。只输出你高度确信是该品类核心的 JTBD，宁缺毋滥。"
+        )
+
+    return f"""分析产品品类：{req.category}
+
+{grounding}
 
 生成一个用于竞品 UX 设计标杆研究的场景网格。请用{lang}返回。
 
+原则：质量优先，覆盖其次。宁可少而准，不要多而杂。
+
 要求：
-- 8-12 个 JTBD 任务（用意图语言，如"邀请协作者+权限分级"，不是功能名）
-- 4-6 个旅程阶段（如"首次配置/日常使用/异常处理/规模化管理"）
-- 每个有意义的 JTBD×阶段组合生成 1-3 个关键页面/状态，优先包括非 happy-path（空状态/错误态/权限边界/数据边界）
-- value_score(0-1)：格子对标杆研究的价值，非 happy-path 和差异化程度高的格子分更高
+- 5-7 个 JTBD 任务，聚焦最核心、最值得做标杆研究的任务（用意图语言，
+  如"邀请协作者+权限分级"，不是功能名如"成员管理"）
+- 3-5 个旅程阶段（如"首次配置/日常使用/异常处理/规模化管理"）
+- 只为高价值的 JTBD×阶段组合生成页面/状态，优先非 happy-path
+  （空状态/错误态/权限边界/数据边界）
+- 整个网格总计 12-18 个格子，不要超过 18 个
+- value_score(0-1)：格子对标杆研究的价值，非 happy-path 和差异化程度高的分更高
 
 返回纯 JSON（无代码块）：
 {{"jtbd_tasks":["..."],"journey_stages":["..."],"cells":[{{"jtbd":"...","journey_stage":"...","page_state":"...","value_score":0.8}}]}}"""
