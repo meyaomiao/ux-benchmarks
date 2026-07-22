@@ -1,8 +1,8 @@
 // API client. Falls back to mock data when NEXT_PUBLIC_USE_MOCK !== "false".
 // Backend endpoints mirror docs/collection-phase-spec-v2.md (M0 / M1).
 
-import type { Competitor, LexiconEntry, GridCell, ListResponse, CoverageRow, ShortlistResponse } from "./types";
-import { mockCompetitors, mockLexicon, mockCells, mockCoverage, mockShortlist } from "./mock";
+import type { Competitor, LexiconEntry, GridCell, ListResponse, CoverageRow, ShortlistResponse, MappingCard } from "./types";
+import { mockCompetitors, mockLexicon, mockCells, mockCoverage, mockShortlist, mockMappingCards } from "./mock";
 
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK !== "false";
 const BASE = "/api/v1";
@@ -51,6 +51,31 @@ export const api = {
       { items: mockShortlist[`${cellId}|${competitorId}`] ?? [], total: (mockShortlist[`${cellId}|${competitorId}`] ?? []).length },
     ),
 
+  // M1 · Create a new grid cell
+  createCell: async (data: { jtbd: string; journey_stage: string; page_state: string; value_score?: number; cell_key?: string }): Promise<GridCell> => {
+    if (USE_MOCK) {
+      await new Promise((r) => setTimeout(r, 200));
+      return {
+        ...data,
+        id: crypto.randomUUID(),
+        cell_key: data.cell_key || [data.jtbd, data.journey_stage, data.page_state].join('.').replace(/[^a-z0-9.]+/gi, '-').toLowerCase().slice(0, 80),
+        version: 1,
+        status: 'active',
+        requires_review: false,
+        value_score: data.value_score ?? 0.5,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as GridCell;
+    }
+    const res = await fetch('/api/v1/m1/cells', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json() as Promise<GridCell>;
+  },
+
   // M4 · Review actions. In mock mode these are no-ops that resolve immediately
   // so the UI flow is exercisable without a backend.
   acceptAsset: async (assetId: string, observationFields: Record<string, unknown> = {}) => {
@@ -70,36 +95,6 @@ export const api = {
     });
     if (!res.ok) throw new Error(`reject failed: ${res.status}`);
     return res.json();
-  },
-
-  // M1 · Create a single grid cell
-  createCell: async (input: GeneratedCell): Promise<GridCell> => {
-    if (USE_MOCK) {
-      await new Promise((r) => setTimeout(r, 120));
-      const slug = (s: string) =>
-        s.toLowerCase().replace(/\s+/g, "-").replace(/[^\w-]/g, "").slice(0, 40);
-      const now = new Date().toISOString();
-      return {
-        id: `g-${Math.random().toString(36).slice(2, 10)}`,
-        cell_key: `${slug(input.jtbd)}.${slug(input.journey_stage)}.${slug(input.page_state)}`,
-        jtbd: input.jtbd,
-        journey_stage: input.journey_stage,
-        page_state: input.page_state,
-        value_score: input.value_score,
-        version: 1,
-        status: "active",
-        requires_review: false,
-        created_at: now,
-        updated_at: now,
-      };
-    }
-    const res = await fetch(`${BASE}/m1/cells`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    });
-    if (!res.ok) throw new Error(`createCell failed: ${res.status}`);
-    return res.json() as Promise<GridCell>;
   },
 
   // M1 · AI grid generation
@@ -130,6 +125,61 @@ export const api = {
     });
     if (!res.ok) throw new Error(await res.text());
     return res.json() as Promise<GridGenerationResult>;
+  },
+
+  // M2 · Mapping cards
+  getMappingCard: async (cellId: string): Promise<MappingCard | null> => {
+    if (USE_MOCK) {
+      await new Promise((r) => setTimeout(r, 150));
+      return mockMappingCards[cellId] ?? null;
+    }
+    const res = await fetch(`${BASE}/m2/mapping-cards/${cellId}`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`getMappingCard failed: ${res.status}`);
+    return res.json();
+  },
+
+  saveMappingCard: async (
+    cellId: string,
+    data: { intent_definition: string; inclusion_criteria?: string | null; exclusion_criteria?: string | null },
+  ): Promise<MappingCard> => {
+    if (USE_MOCK) {
+      await new Promise((r) => setTimeout(r, 180));
+      const existing = mockMappingCards[cellId];
+      const now = new Date().toISOString();
+      const card: MappingCard = {
+        id: existing?.id ?? `mc-${cellId}`,
+        cell_id: cellId,
+        intent_definition: data.intent_definition,
+        inclusion_criteria: data.inclusion_criteria ?? null,
+        exclusion_criteria: data.exclusion_criteria ?? null,
+        anchor_screenshot_asset_id: existing?.anchor_screenshot_asset_id ?? null,
+        version: (existing?.version ?? 0) + 1,
+        is_complete: data.intent_definition.trim().length > 0 &&
+          (!!data.inclusion_criteria?.trim() || !!data.exclusion_criteria?.trim()),
+        created_by: existing?.created_by ?? null,
+        reviewed_by: existing?.reviewed_by ?? null,
+        created_at: existing?.created_at ?? now,
+        updated_at: now,
+      };
+      mockMappingCards[cellId] = card;
+      return card;
+    }
+    const existing = await api.getMappingCard(cellId);
+    if (!existing) {
+      const res = await fetch(`${BASE}/m2/mapping-cards`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cell_id: cellId, ...data }),
+      });
+      if (!res.ok) throw new Error(`createMappingCard failed: ${res.status}`);
+      return res.json();
+    }
+    const res = await fetch(`${BASE}/m2/mapping-cards/${cellId}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error(`patchMappingCard failed: ${res.status}`);
+    return res.json();
   },
 };
 

@@ -1,7 +1,7 @@
 // Mock data — used when NEXT_PUBLIC_USE_MOCK !== "false" (default: on).
 // Lets the UI render fully without a running backend.
 
-import type { Competitor, LexiconEntry, GridCell, CoverageRow } from "./types";
+import type { Competitor, LexiconEntry, GridCell, CoverageRow, MappingCard, ShortlistItem } from "./types";
 
 const now = "2026-07-21T10:00:00Z";
 
@@ -138,10 +138,6 @@ export const mockCoverage: CoverageRow[] = [
   { cell_id: "g5", competitor_id: "c1000000-0000-0000-0000-000000000002", status: "UNPROBED", independent_source_count: 0, latest_captured_at: null, coverage_confidence: 0, evidence_type_breakdown: {}, tier: "tier-1" },
 ];
 
-// Mock shortlist items — rich AI-scored evidence, one per cell×competitor that has assets.
-// These demonstrate what the evidence view should feel like.
-import type { ShortlistItem } from "./types";
-
 export const mockShortlist: Record<string, ShortlistItem[]> = {
   "g1|c1000000-0000-0000-0000-000000000001": [
     {
@@ -211,4 +207,36 @@ export const mockShortlist: Record<string, ShortlistItem[]> = {
       captured_at: "2026-07-20T11:00:00Z", image_path_available: false,
     },
   ],
+};
+
+// M2 · Mapping cards — pre-filled for cells with SHORTLIST_READY coverage
+export const mockMappingCards: Record<string, MappingCard> = {
+  g2: {
+    id: "mc-g2",
+    cell_id: "g2",
+    intent_definition: "首次为新成员分配角色时，了解每个角色能做什么、不能做什么",
+    inclusion_criteria: "角色选择界面、权限清单、邀请弹窗中的角色预览",
+    exclusion_criteria: "定价页、营销文案",
+    anchor_screenshot_asset_id: null,
+    version: 1,
+    is_complete: true,
+    created_by: null,
+    reviewed_by: null,
+    created_at: now,
+    updated_at: now,
+  },
+  g4: {
+    id: "mc-g4",
+    cell_id: "g4",
+    intent_definition: "遇到权限冲突时，理解冲突原因并找到解决路径",
+    inclusion_criteria: "权限冲突警告界面、解决操作步骤",
+    exclusion_criteria: "一般性帮助文档",
+    anchor_screenshot_asset_id: null,
+    version: 1,
+    is_complete: true,
+    created_by: null,
+    reviewed_by: null,
+    created_at: now,
+    updated_at: now,
+  },
 };

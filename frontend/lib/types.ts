@@ -116,3 +116,19 @@ export interface ShortlistResponse {
   items: ShortlistItem[];
   total: number;
 }
+
+// M2 · Mapping cards
+export interface MappingCard {
+  id: string;
+  cell_id: string;
+  intent_definition: string;    // max 150 chars
+  inclusion_criteria: string | null;
+  exclusion_criteria: string | null;
+  anchor_screenshot_asset_id: string | null;
+  version: number;
+  is_complete: boolean;
+  created_by: string | null;
+  reviewed_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
