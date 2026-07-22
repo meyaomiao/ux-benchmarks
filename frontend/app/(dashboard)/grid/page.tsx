@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import type { GridCell, Competitor } from "@/lib/types";
 import { MappingCardEditor } from "@/components/grid/mapping-card-editor";
-import { CellWizard } from "@/components/grid/cell-wizard";
+import CellWizard from "@/components/grid/cell-wizard";
 import { mockMappingCards } from "@/lib/mock";
 
 // Coverage state is M5's job; here we just show a placeholder legend so the
