@@ -1,8 +1,8 @@
 // API client. Falls back to mock data when NEXT_PUBLIC_USE_MOCK !== "false".
 // Backend endpoints mirror docs/collection-phase-spec-v2.md (M0 / M1).
 
-import type { Competitor, LexiconEntry, GridCell, ListResponse } from "./types";
-import { mockCompetitors, mockLexicon, mockCells } from "./mock";
+import type { Competitor, LexiconEntry, GridCell, ListResponse, CoverageRow } from "./types";
+import { mockCompetitors, mockLexicon, mockCells, mockCoverage } from "./mock";
 
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK !== "false";
 const BASE = "/api/v1";
@@ -39,4 +39,8 @@ export const api = {
   // M1 · Grid cells
   listCells: () =>
     get<ListResponse<GridCell>>("/m1/cells", paginate(mockCells)),
+
+  // M5 · Coverage
+  getCoverage: () =>
+    get<CoverageRow[]>("/m5/coverage", mockCoverage),
 };
