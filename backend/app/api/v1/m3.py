@@ -2,6 +2,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
+from app.core.errors import AppError
 from app.schemas.m3 import (
     QueueItemRead, QueueListResponse, PinRequest,
     QueryBundle, SourceRegistryListResponse,
@@ -10,6 +11,7 @@ from app.services.m3_collection.queue_service import enqueue_cell, list_queued
 from app.services.m3_collection.query_expansion import build_query_bundle
 from app.services.m3_collection import source_registry_service
 from app.services.m3_collection.state_machine import Trigger
+from app.services.m3_collection.screenshot_service import capture_url
 
 router = APIRouter(prefix="/m3", tags=["M3 · Collection Engine"])
 
@@ -62,3 +64,39 @@ async def list_source_registry(
         items=items, total=total, limit=limit, offset=offset,
         has_next=offset + limit < total,
     )
+
+
+# --- Manual screenshot (#30) ------------------------------------------------
+
+@router.post("/manual-screenshot", status_code=201)
+async def manual_screenshot(data: dict, db: Session = Depends(get_db)):
+    """Take a Playwright screenshot of a URL and add it to the shortlist.
+
+    Body: {"url": "https://...", "cell_id": "uuid", "competitor_id": "uuid"}
+    Returns the persisted Asset summary.
+    """
+    url = (data.get("url") or "").strip()
+    if not url or not url.startswith("http"):
+        raise AppError("BAD_REQUEST", "url must be a valid http(s) URL", 400)
+    try:
+        cell_id = UUID(str(data.get("cell_id", "")))
+        competitor_id = UUID(str(data.get("competitor_id", "")))
+    except (ValueError, AttributeError):
+        raise AppError("BAD_REQUEST", "cell_id and competitor_id must be valid UUIDs", 400)
+
+    try:
+        asset = capture_url(db, url, cell_id, competitor_id)
+    except RuntimeError as exc:
+        raise AppError("CAPTURE_FAILED", str(exc), 500)
+
+    return {
+        "id": str(asset.id),
+        "source_url": asset.source_url,
+        "title": None,
+        "file_path": asset.file_path,
+        "ai_score": asset.ai_score,
+        "scored_by": (asset.ai_score_breakdown or {}).get("scored_by", "manual"),
+        "evidence_type": asset.evidence_type,
+        "cell_id": str(asset.cell_id),
+        "competitor_id": str(asset.competitor_id),
+    }

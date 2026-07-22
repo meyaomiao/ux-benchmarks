@@ -14,6 +14,14 @@ export default function CollectPage() {
   const [pinStatus, setPinStatus] = useState<"idle" | "loading" | "ok" | "err">("idle");
   const [pinErr, setPinErr] = useState("");
 
+  // Manual screenshot state
+  const [ssUrl, setSsUrl] = useState("");
+  const [ssCell, setSsCell] = useState("");
+  const [ssComp, setSsComp] = useState("");
+  const [ssStatus, setSsStatus] = useState<"idle" | "loading" | "ok" | "err">("idle");
+  const [ssErr, setSsErr] = useState("");
+  const [ssResult, setSsResult] = useState<{ source_url: string; ai_score: number | null } | null>(null);
+
   const [metrics, setMetrics] = useState<Record<string, unknown> | null>(null);
 
   const loadQueue = () =>
@@ -27,8 +35,8 @@ export default function CollectPage() {
         setCompetitors(confirmed);
         setQueue(q);
         setMetrics(m);
-        if (g.items[0]) setPinCell(g.items[0].id);
-        if (confirmed[0]) setPinComp(confirmed[0].id);
+        if (g.items[0]) { setPinCell(g.items[0].id); setSsCell(g.items[0].id); }
+        if (confirmed[0]) { setPinComp(confirmed[0].id); setSsComp(confirmed[0].id); }
       })
       .finally(() => setLoading(false));
   }, []);
@@ -44,6 +52,26 @@ export default function CollectPage() {
     } catch (e) {
       setPinErr(e instanceof Error ? e.message : "操作失败");
       setPinStatus("err");
+    }
+  }
+
+  async function handleScreenshot() {
+    if (!ssUrl.trim() || !ssCell || !ssComp) return;
+    setSsStatus("loading");
+    setSsErr("");
+    setSsResult(null);
+    try {
+      const result = await api.manualScreenshot({
+        url: ssUrl.trim(),
+        cell_id: ssCell,
+        competitor_id: ssComp,
+      });
+      setSsResult({ source_url: result.source_url, ai_score: result.ai_score });
+      setSsStatus("ok");
+      setSsUrl("");
+    } catch (e) {
+      setSsErr(e instanceof Error ? e.message : "截图失败");
+      setSsStatus("err");
     }
   }
 
@@ -135,6 +163,85 @@ export default function CollectPage() {
             </button>
             {pinStatus === "ok" && <span className="text-sm text-green-600">✓ 已加入队列</span>}
             {pinStatus === "err" && <span className="text-sm text-red-500">{pinErr}</span>}
+          </div>
+        )}
+      </div>
+
+      {/* Manual Screenshot Panel */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6">
+        <div className="flex items-center gap-2 mb-3">
+          <h2 className="text-sm font-semibold text-gray-700">手动截图</h2>
+          <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">Playwright</span>
+        </div>
+        <p className="text-xs text-gray-500 mb-4">
+          粘贴竞品页面 URL，系统自动截图并加入审核队列。支持任何公开网页：帮助文档、功能页、产品演示页等。
+        </p>
+        {loading ? (
+          <div className="text-sm text-gray-400">加载中…</div>
+        ) : (
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">页面 URL</label>
+              <input
+                type="url"
+                value={ssUrl}
+                onChange={(e) => setSsUrl(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleScreenshot()}
+                placeholder="https://help.linear.app/docs/…"
+                disabled={ssStatus === "loading"}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-300 disabled:opacity-50"
+              />
+            </div>
+            <div className="flex flex-wrap gap-3 items-end">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">关联场景格子</label>
+                <select
+                  value={ssCell}
+                  onChange={(e) => setSsCell(e.target.value)}
+                  disabled={ssStatus === "loading"}
+                  className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 min-w-[200px] disabled:opacity-50"
+                >
+                  {cells.map((c) => (
+                    <option key={c.id} value={c.id}>{c.page_state} · {c.journey_stage}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">竞品</label>
+                <select
+                  value={ssComp}
+                  onChange={(e) => setSsComp(e.target.value)}
+                  disabled={ssStatus === "loading"}
+                  className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 min-w-[140px] disabled:opacity-50"
+                >
+                  {competitors.map((c) => (
+                    <option key={c.id} value={c.id}>{c.canonical_name}</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                onClick={handleScreenshot}
+                disabled={!ssUrl.trim() || !ssCell || !ssComp || ssStatus === "loading"}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                {ssStatus === "loading" ? "截图中…" : "📸 截图并加入审核"}
+              </button>
+            </div>
+            {ssStatus === "ok" && ssResult && (
+              <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+                <span>✓ 截图完成</span>
+                <span className="text-xs text-green-600 truncate max-w-[300px]">{ssResult.source_url}</span>
+                {ssResult.ai_score != null && (
+                  <span className="ml-auto text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
+                    分数 {(ssResult.ai_score * 100).toFixed(0)}
+                  </span>
+                )}
+                <a href="/review" className="text-xs text-indigo-600 hover:underline ml-1 whitespace-nowrap">→ 去审核</a>
+              </div>
+            )}
+            {ssStatus === "err" && (
+              <p className="text-xs text-red-500">{ssErr}</p>
+            )}
           </div>
         )}
       </div>

@@ -294,7 +294,12 @@ class InteractiveDemoAdapter:
         frame_dir: Path,
         max_frames: int,
     ) -> list[Candidate]:
-        """Open a page, find demo iframes, screenshot steps."""
+        """Open a page, find demo iframes, screenshot steps.
+
+        Fallback: if no known demo-platform iframe is found on the page,
+        screenshot the full viewport anyway — gives us general UI screenshots
+        from feature pages, help docs with embedded images, etc.
+        """
         page = browser.new_page()
         candidates: list[Candidate] = []
         try:
@@ -319,10 +324,71 @@ class InteractiveDemoAdapter:
                 candidates.extend(frames)
                 if len(candidates) >= max_frames:
                     break
+
+            # Fallback: no demo iframe found — screenshot the page itself.
+            # Useful for product feature pages, help docs with screenshots, etc.
+            if not candidates and max_frames > 0:
+                candidates.extend(
+                    self._screenshot_page_fallback(
+                        page, page_url, frame_dir, cell_id, competitor_id
+                    )
+                )
         finally:
             page.close()
 
         return candidates
+
+    def _screenshot_page_fallback(
+        self,
+        page,
+        page_url: str,
+        frame_dir: Path,
+        cell_id: UUID,
+        competitor_id: UUID,
+    ) -> list[Candidate]:
+        """Screenshot the viewport when no demo iframe was found on the page.
+
+        Also extracts visible text from the main content area so the scorer
+        can use text-mode scoring as a fallback if the image isn't informative.
+        """
+        from uuid import uuid4
+
+        try:
+            fpath = frame_dir / f"{uuid4().hex[:8]}_page.png"
+            page.screenshot(path=str(fpath), full_page=False)
+
+            # Extract visible text for dual-mode scoring.
+            text_content = ""
+            try:
+                text_content = page.evaluate("""() => {
+                    const sel = ['main', 'article', '[role="main"]', 'body'];
+                    for (const s of sel) {
+                        const el = document.querySelector(s);
+                        if (el) return el.innerText.slice(0, 800);
+                    }
+                    return document.body.innerText.slice(0, 800);
+                }""") or ""
+            except Exception:
+                pass
+
+            title = page.title() or page_url[:80]
+            return [
+                Candidate(
+                    cell_id=cell_id,
+                    competitor_id=competitor_id,
+                    source_url=page_url,
+                    source_type=self.source_type,
+                    title=title[:200],
+                    snippet=text_content[:160],
+                    text_content=text_content,
+                    image_path=str(fpath),
+                    rights_status="third_party_official",
+                    evidence_type_hint=EvidenceType.OBSERVED,
+                )
+            ]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("page fallback screenshot failed for %s: %s", page_url, exc)
+            return []
 
     def _screenshot_demo_steps(
         self,

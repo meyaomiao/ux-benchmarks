@@ -172,6 +172,43 @@ export const api = {
     return res.json();
   },
 
+  // M3 · Manual screenshot (#30)
+  manualScreenshot: async (payload: {
+    url: string;
+    cell_id: string;
+    competitor_id: string;
+  }): Promise<{
+    id: string;
+    source_url: string;
+    file_path: string | null;
+    ai_score: number | null;
+    scored_by: string;
+    evidence_type: string;
+    cell_id: string;
+    competitor_id: string;
+  }> => {
+    if (USE_MOCK) {
+      await new Promise(r => setTimeout(r, 2200));
+      return {
+        id: crypto.randomUUID(),
+        source_url: payload.url,
+        file_path: "/mock/screenshot.png",
+        ai_score: 0.8,
+        scored_by: "manual",
+        evidence_type: "observed",
+        cell_id: payload.cell_id,
+        competitor_id: payload.competitor_id,
+      };
+    }
+    const res = await fetch(`${BASE}/m3/manual-screenshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
   // M5 · Metrics + reports (#29 #30)
   getCoverageMetrics: () =>
     get<Record<string, unknown>>("/m5/metrics", {
