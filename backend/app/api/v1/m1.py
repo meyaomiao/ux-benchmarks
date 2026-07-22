@@ -67,3 +67,20 @@ async def list_unmapped_inbox():
 @router.post("/inbox/{inbox_id}/resolve")
 async def resolve_inbox_item(inbox_id: str):
     raise HTTPException(status_code=501, detail="Not implemented — see issue #10")
+
+
+# --- AI grid generation -------------------------------------------------
+
+from app.schemas.m1 import GridGenerationRequest, GridGenerationResponse  # noqa: E402
+from app.services.m1_grid.generation_service import generate_grid as _generate_grid  # noqa: E402
+
+
+@router.post("/cells/generate", response_model=GridGenerationResponse)
+async def generate_grid_endpoint(data: GridGenerationRequest):
+    """Generate a scene grid from a product category using Claude.
+
+    Input a product category (e.g. "项目管理工具") → AI returns JTBD tasks,
+    journey stages and key page/state cells for a competitive UX study.
+    Falls back to deterministic mock when use_collection_mock=True or no key.
+    """
+    return _generate_grid(data)

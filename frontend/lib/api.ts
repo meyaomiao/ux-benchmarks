@@ -97,6 +97,36 @@ export const api = {
     return res.json();
   },
 
+  // M1 · AI grid generation
+  generateGrid: async (category: string, knownProducts: string[] = []): Promise<GridGenerationResult> => {
+    if (USE_MOCK) {
+      await new Promise((r) => setTimeout(r, 1800));
+      return {
+        category,
+        jtbd_tasks: ["邀请协作者+权限分级", "创建首个项目/工作区", "追踪任务进度", "设置通知与提醒"],
+        journey_stages: ["首次配置", "日常使用", "异常处理"],
+        cells: [
+          { jtbd: "邀请协作者+权限分级", journey_stage: "首次配置", page_state: "角色选择页", value_score: 0.9 },
+          { jtbd: "邀请协作者+权限分级", journey_stage: "首次配置", page_state: "权限冲突提示（异常态）", value_score: 0.85 },
+          { jtbd: "邀请协作者+权限分级", journey_stage: "首次配置", page_state: "邀请弹窗（空状态）", value_score: 0.8 },
+          { jtbd: "创建首个项目/工作区", journey_stage: "首次配置", page_state: "空状态引导页", value_score: 0.8 },
+          { jtbd: "追踪任务进度", journey_stage: "日常使用", page_state: "看板视图", value_score: 0.6 },
+          { jtbd: "追踪任务进度", journey_stage: "异常处理", page_state: "数据加载失败态", value_score: 0.75 },
+          { jtbd: "设置通知与提醒", journey_stage: "首次配置", page_state: "通知权限请求", value_score: 0.7 },
+        ],
+        total: 7,
+        generated_by: "mock",
+      };
+    }
+    const res = await fetch("/api/v1/m1/cells/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ category, known_products: knownProducts }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json() as Promise<GridGenerationResult>;
+  },
+
   // M2 · Mapping cards
   getMappingCard: async (cellId: string): Promise<MappingCard | null> => {
     if (USE_MOCK) {
@@ -152,3 +182,19 @@ export const api = {
     return res.json();
   },
 };
+
+// Types for AI grid generation (exported for use in components)
+export interface GeneratedCell {
+  jtbd: string;
+  journey_stage: string;
+  page_state: string;
+  value_score: number;
+}
+export interface GridGenerationResult {
+  category: string;
+  jtbd_tasks: string[];
+  journey_stages: string[];
+  cells: GeneratedCell[];
+  total: number;
+  generated_by: string;
+}
