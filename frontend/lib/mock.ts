@@ -1,7 +1,7 @@
 // Mock data — used when NEXT_PUBLIC_USE_MOCK !== "false" (default: on).
 // Lets the UI render fully without a running backend.
 
-import type { Competitor, LexiconEntry, GridCell, CoverageRow, MappingCard, ShortlistItem, Report } from "./types";
+import type { Competitor, LexiconEntry, GridCell, CoverageRow, MappingCard, ShortlistItem, Report, Insight } from "./types";
 
 const now = "2026-07-21T10:00:00Z";
 
@@ -240,6 +240,59 @@ export const mockMappingCards: Record<string, MappingCard> = {
     updated_at: now,
   },
 };
+
+// L3 · Insights (mutable store — persists across mock API calls) ---------------
+
+export const mockInsights: Insight[] = [
+  {
+    id: "ins-0001-0000-0000-0000-000000000001",
+    cell_id: "g2",
+    competitor_id: "c1000000-0000-0000-0000-000000000001",
+    claim: "在为新成员分配访问权限的场景中，Linear 将角色选择与权限明细实时展开绑定在同一视图内，使分配者在不离开决策上下文的情况下完成「角色→具体能力」核对，跳转次数为 0。",
+    analysis: "认知成本降低：角色名是抽象标签，把每项权限以离散开关逐条呈现，等于将抽象标签即时翻译成可观测的能力清单。操作成本降低：选择与核对发生在同一容器内，消除往返路径。决策成本降低：开关的开/关状态提供二值化可扫描的边界信号。",
+    recommendation: "在角色/权限分配的选择控件旁，绑定一个随选中项实时刷新的权限明细区，用离散开/关状态逐条列出关键能力（读/写/删/管理）。",
+    design_principle: "决策触发点与决策依据信息同屏共置（Inline Consequence Preview）：凡用户在做选择前需查阅该选项后果/属性，就应将该信息直接内联展示在选择控件旁，目标为跳转次数 0。",
+    limits: "权限项超过 20 条时逐条展开可能增加扫描负担；角色权限完全不可修改时须用只读样式避免歧义。",
+    source_observation_ids: [],
+    confidence: "medium",
+    generated_by: "mock",
+    is_draft: false,
+    created_at: now,
+    updated_at: now,
+  },
+  {
+    id: "ins-0002-0000-0000-0000-000000000002",
+    cell_id: "g2",
+    competitor_id: "c1000000-0000-0000-0000-000000000002",
+    claim: "Notion 在邀请人数超出席位限制时，在阻断提示内同时呈现「当前已用/总量」和「升级入口」，使用户在同一步骤内完成「感知边界→决策升级」闭环，避免死胡同体验。",
+    analysis: "资源限制阻断的核心矛盾：用户被迫中断流程但无法在当前页面解决问题。Notion 的方案把「感知边界」和「解决出口」共置，将死胡同变成可继续的分支。",
+    recommendation: "当触发资源限制阻断时，提示框内包含：当前消耗量/总配额 + 主要升级CTA + 次要的「移除现有成员」选项。",
+    design_principle: "资源限制阻断应同时告知边界+提供解决路径（No Dead-end Error States）：任何阻断页面必须至少包含一个可操作的解决出口，避免用户无路可走。",
+    limits: "仅适用于席位/配额类限制；纯权限不足的情况（用户无法升级）应改为联系管理员的引导，否则升级CTA会造成误导。",
+    source_observation_ids: [],
+    confidence: "medium",
+    generated_by: "mock",
+    is_draft: false,
+    created_at: now,
+    updated_at: now,
+  },
+  {
+    id: "ins-0003-0000-0000-0000-000000000003",
+    cell_id: "g1",
+    competitor_id: "c1000000-0000-0000-0000-000000000001",
+    claim: "Linear 的邀请弹窗在用户输入邮箱后立即显示「工作区已有该成员」的内联提示，阻止重复邀请，减少管理员处理重复席位占用的后续成本。",
+    analysis: "表单验证的时机选择影响修复成本：提交后提示比输入时提示需要更多步骤来修正错误。Linear 使用实时校验将错误修复时机前移，符合尼尔森「帮助用户识别和从错误中恢复」原则。",
+    recommendation: "邀请表单在用户输入邮箱的 onBlur 事件时，调用轻量 API 检查邮箱是否已存在，存在则立即显示内联提示而非等待提交。",
+    design_principle: "错误感知时机越靠前，修复成本越低。表单字段的状态校验应尽可能在用户完成输入时（而非提交时）给出反馈。",
+    limits: "实时 API 校验会增加后端请求量，需对邮箱输入做 debounce（建议 500ms）；离线或 API 响应慢时需有降级策略（不阻断提交）。",
+    source_observation_ids: [],
+    confidence: "low",
+    generated_by: "mock",
+    is_draft: true,
+    created_at: now,
+    updated_at: now,
+  },
+];
 
 // L5 · Reports -----------------------------------------------------------------
 
