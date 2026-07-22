@@ -1,8 +1,8 @@
 // API client. Falls back to mock data when NEXT_PUBLIC_USE_MOCK !== "false".
 // Backend endpoints mirror docs/collection-phase-spec-v2.md (M0 / M1).
 
-import type { Competitor, LexiconEntry, GridCell, ListResponse, CoverageRow, ShortlistResponse, MappingCard, QueueItem, Insight } from "./types";
-import { mockCompetitors, mockLexicon, mockCells, mockCoverage, mockShortlist, mockMappingCards } from "./mock";
+import type { Competitor, LexiconEntry, GridCell, ListResponse, CoverageRow, ShortlistResponse, MappingCard, QueueItem, Insight, Report, ReportAudience, ReportFormat } from "./types";
+import { mockCompetitors, mockLexicon, mockCells, mockCoverage, mockShortlist, mockMappingCards, mockReports, mockReportBody } from "./mock";
 
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK !== "false";
 const BASE = "/api/v1";
@@ -233,6 +233,66 @@ export const api = {
     });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
+  },
+
+  // L5 · Reports
+  listReports: async (): Promise<Report[]> => {
+    if (USE_MOCK) {
+      await new Promise(r => setTimeout(r, 150));
+      return mockReports;
+    }
+    const res = await fetch(`${BASE}/reports`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
+  composeReport: async (payload: {
+    insight_ids: string[];
+    audience: ReportAudience;
+    format_type: ReportFormat;
+    title?: string;
+  }): Promise<Report> => {
+    if (USE_MOCK) {
+      await new Promise(r => setTimeout(r, 2500));
+      const now = new Date().toISOString();
+      const labels: Record<string, string> = {
+        management: "管理层", designer: "设计师", pm: "产品经理",
+      };
+      const fmts: Record<string, string> = {
+        summary_5min: "5分钟摘要", review_15min: "设计评审",
+        onepager: "单页总览", full: "完整报告",
+      };
+      const report: Report = {
+        id: crypto.randomUUID(),
+        title: payload.title || `竞品设计标杆 · ${fmts[payload.format_type]} · ${labels[payload.audience]}`,
+        audience: payload.audience,
+        format_type: payload.format_type,
+        source_insight_ids: payload.insight_ids,
+        body_markdown: mockReportBody,
+        generated_by: "mock",
+        created_at: now,
+        updated_at: now,
+      };
+      mockReports.unshift(report);
+      return report;
+    }
+    const res = await fetch(`${BASE}/reports`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
+  deleteReport: async (reportId: string): Promise<void> => {
+    if (USE_MOCK) {
+      const idx = mockReports.findIndex(r => r.id === reportId);
+      if (idx >= 0) mockReports.splice(idx, 1);
+      return;
+    }
+    const res = await fetch(`${BASE}/reports/${reportId}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(await res.text());
   },
 
   saveMappingCard: async (

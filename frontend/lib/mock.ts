@@ -1,7 +1,7 @@
 // Mock data — used when NEXT_PUBLIC_USE_MOCK !== "false" (default: on).
 // Lets the UI render fully without a running backend.
 
-import type { Competitor, LexiconEntry, GridCell, CoverageRow, MappingCard, ShortlistItem } from "./types";
+import type { Competitor, LexiconEntry, GridCell, CoverageRow, MappingCard, ShortlistItem, Report } from "./types";
 
 const now = "2026-07-21T10:00:00Z";
 
@@ -240,3 +240,66 @@ export const mockMappingCards: Record<string, MappingCard> = {
     updated_at: now,
   },
 };
+
+// L5 · Reports -----------------------------------------------------------------
+
+export const mockReportBody = `# 权限管理场景 · 竞品设计标杆报告
+
+## 核心洞察
+
+共分析 **2** 条高置信洞察，均来自「首次配置 × 权限分配」场景。
+
+---
+
+### 洞察 1 · 角色选择与权限预览同屏联动（Linear）
+
+**结论**
+在为新成员分配访问权限的场景中，将角色选择与该角色权限明细的实时展开绑定在同一视图内，使分配者在不离开当前决策上下文的情况下完成「角色→具体能力」的核对，页面跳转次数为 0。
+
+**设计原则**
+决策触发点与决策依据信息同屏共置（Inline Consequence Preview）：凡用户在做选择前需查阅该选项后果/属性，就应将该信息直接内联展示在选择控件旁，目标为跳转次数 0。
+
+**建议**
+在角色/权限分配的选择控件旁，绑定一个随选中项实时刷新的权限明细区，用离散开关逐条列出关键能力（读/写/删/管理），支持在预览区直接调整。
+
+**适用限制**
+权限项超过 20 条时逐条展开可能增加扫描负担；角色权限完全不可修改时须用只读样式避免歧义。
+
+---
+
+### 洞察 2 · 席位用尽时的阻断态设计（Notion）
+
+**结论**
+邀请人数超出席位限制时，若在阻断提示内同时呈现「当前已用/总量」和「升级入口」，用户感知到的受阻感显著低于仅显示错误消息的方案，因为用户在同一步骤内可完成「感知边界→决策升级」的闭环。
+
+**设计原则**
+资源限制阻断应同时告知边界+提供解决路径，避免死胡同，减少用户离开当前流程的次数。
+
+**建议**
+当触发资源限制阻断时，提示框内包含三个元素：当前消耗量/总配额、主要升级CTA、以及次要的「移除现有成员」选项。
+
+---
+
+## 可复用设计原则汇总
+
+1. **Inline Consequence Preview** — 在选择控件旁同步渲染该选项展开后的离散能力清单
+2. **No Dead-end Error States** — 阻断提示内永远包含至少一个可操作的解决出口
+
+---
+
+*本报告由 UX 设计标杆工具自动生成，基于已采集的真实证据。置信度仅反映观察充分程度，不代表绝对结论。*
+`;
+
+export const mockReports: Report[] = [
+  {
+    id: "rpt-0001-0000-0000-0000-000000000001",
+    title: "权限管理场景 · 设计评审 · 设计师",
+    audience: "designer",
+    format_type: "review_15min",
+    source_insight_ids: ["ins-0001-0000-0000-0000-000000000001"],
+    body_markdown: mockReportBody,
+    generated_by: "mock",
+    created_at: now,
+    updated_at: now,
+  },
+];

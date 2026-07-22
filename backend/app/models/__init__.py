@@ -5,6 +5,7 @@ from app.models.m3_collection import Asset, SourceRegistry
 from app.models.m4_annotation import Observation, Claim
 from app.models.m5_coverage import CoverageSnapshot
 from app.models.l3_insight import Insight
+from app.models.l5_report import Report
 
 __all__ = [
     "CompetitorEntity",

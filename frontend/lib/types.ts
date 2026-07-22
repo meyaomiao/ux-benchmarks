@@ -146,6 +146,22 @@ export interface Insight {
   updated_at: string;
 }
 
+// L5 · Reports
+export type ReportAudience = "management" | "designer" | "pm";
+export type ReportFormat = "summary_5min" | "review_15min" | "onepager" | "full";
+
+export interface Report {
+  id: string;
+  title: string;
+  audience: ReportAudience;
+  format_type: ReportFormat;
+  source_insight_ids: string[];
+  body_markdown: string;
+  generated_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // M2 · Mapping cards
 export interface MappingCard {
   id: string;
