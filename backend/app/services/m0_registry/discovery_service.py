@@ -104,11 +104,15 @@ def _call_claude(category: str, known_products: list[str]) -> list[dict]:
     prompt = (
         f"产品品类：{category}\n"
         f"已知竞品：{known}\n\n"
-        "请推荐值得研究的 UX 设计标杆（不包括已知竞品），分三层：\n"
-        "1. direct（直接竞品）：同品类、同目标用户，2~3 个\n"
-        "2. indirect（间接竞品）：不同品类但有重叠 jobs-to-be-done，1~2 个\n"
-        "3. cross_industry（跨行业标杆）：不同行业但在相关交互场景领先，1~2 个\n\n"
-        "每条给出 rationale：为什么从 UX 角度值得研究（不是市场份额，是设计价值）。\n\n"
+        "请尽可能全面地推荐值得研究的 UX 设计标杆（不包括已知竞品），分三层：\n"
+        "1. direct（直接竞品）：同品类、同目标用户，列出 8~12 个，覆盖头部、"
+        "新锐、垂直细分玩家，宁多勿漏\n"
+        "2. indirect（间接竞品）：不同品类但有重叠 jobs-to-be-done，4~6 个\n"
+        "3. cross_industry（跨行业标杆）：不同行业但在相关交互场景领先，4~6 个\n\n"
+        "要求：\n"
+        "- 每个产品名唯一，不要重复；每条 rationale 必须对应正确的产品\n"
+        "- rationale 说明为什么从 UX 角度值得研究（不是市场份额，是设计价值）\n"
+        "- 覆盖不同地区（含中国本土产品）和不同规模的玩家，提高样本代表性\n\n"
         "返回 JSON 数组，每项字段：\n"
         '{"name":"...","tier":"direct|indirect|cross_industry","tier_label":"直接竞品|间接竞品|跨行业标杆",'
         '"rationale":"...","official_domain":"...或null","help_center_domain":"...或null"}\n'
@@ -116,7 +120,7 @@ def _call_claude(category: str, known_products: list[str]) -> list[dict]:
     )
     msg = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=2000,
+        max_tokens=8000,
         system=_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -151,11 +155,18 @@ def discover_competitors(
             raw = _MOCK_SUGGESTIONS
 
     known_lower = {p.lower() for p in known}
+    seen: set[str] = set()
     suggestions: list[DiscoverySuggestion] = []
     for item in raw:
-        name = item.get("name", "")
-        if name.lower() in known_lower:
+        name = (item.get("name") or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in known_lower:
             continue   # skip already-registered products
+        if key in seen:
+            continue   # dedup — Claude occasionally repeats a name
+        seen.add(key)
         suggestions.append(DiscoverySuggestion(
             name=name,
             tier=item.get("tier", "direct"),
