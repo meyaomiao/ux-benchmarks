@@ -4,6 +4,9 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import type { GridCell, Competitor } from "@/lib/types";
+import { MappingCardEditor } from "@/components/grid/mapping-card-editor";
+import { CellWizard } from "@/components/grid/cell-wizard";
+import { mockMappingCards } from "@/lib/mock";
 
 // Coverage state is M5's job; here we just show a placeholder legend so the
 // matrix structure (cell × competitor) is visible. Real state comes later.
@@ -13,6 +16,10 @@ export default function GridPage() {
   const [cells, setCells] = useState<GridCell[]>([]);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editorCell, setEditorCell] = useState<GridCell | null>(null);
+  const [showWizard, setShowWizard] = useState(false);
+  const [quickAdd, setQuickAdd] = useState({ jtbd: "", journey_stage: "", page_state: "" });
+  const [quickAddLoading, setQuickAddLoading] = useState(false);
 
   useEffect(() => {
     Promise.all([api.listCells(), api.listCompetitors()])
@@ -25,10 +32,32 @@ export default function GridPage() {
 
   const stages = Array.from(new Set(cells.map((c) => c.journey_stage)));
 
+  async function handleQuickAdd(e: React.FormEvent) {
+    e.preventDefault();
+    const { jtbd, journey_stage, page_state } = quickAdd;
+    if (!jtbd.trim() || !journey_stage.trim() || !page_state.trim()) return;
+    setQuickAddLoading(true);
+    try {
+      const newCell = await api.createCell({ jtbd: jtbd.trim(), journey_stage: journey_stage.trim(), page_state: page_state.trim() });
+      setCells((prev) => [...prev, newCell]);
+      setQuickAdd({ jtbd: "", journey_stage: "", page_state: "" });
+    } finally {
+      setQuickAddLoading(false);
+    }
+  }
+
   return (
     <div>
       <div className="text-gray-500 text-xs mb-1">M1 · 场景网格</div>
-      <h1 className="text-xl font-bold mb-1">场景网格：任务 × 旅程阶段 × 页面/状态</h1>
+      <div className="flex items-start justify-between mb-1">
+        <h1 className="text-xl font-bold">场景网格：任务 × 旅程阶段 × 页面/状态</h1>
+        <button
+          onClick={() => setShowWizard(true)}
+          className="shrink-0 ml-4 px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+        >
+          初始化网格
+        </button>
+      </div>
       <p className="text-gray-500 text-sm mb-6 max-w-2xl">
         网格是采集的靶子。每个格子是一个可寻址的场景单元，产品向坐标看齐（而非反过来）。
         下方矩阵的列是竞品，格子的证据充分度由 M5 覆盖看板填充。
@@ -49,10 +78,13 @@ export default function GridPage() {
                   <th className="text-left px-4 py-3 font-medium">价值分</th>
                   <th className="text-left px-4 py-3 font-medium">cell_key</th>
                   <th className="text-left px-4 py-3 font-medium">版本</th>
+                  <th className="text-left px-4 py-3 font-medium">映射卡</th>
                 </tr>
               </thead>
               <tbody>
-                {cells.map((c) => (
+                {cells.map((c) => {
+                  const hasCard = !!mockMappingCards[c.id];
+                  return (
                   <tr key={c.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
                     <td className="px-4 py-3">{c.jtbd}</td>
                     <td className="px-4 py-3 text-gray-600">{c.journey_stage}</td>
@@ -72,13 +104,65 @@ export default function GridPage() {
                     </td>
                     <td className="px-4 py-3 text-gray-400 text-xs font-mono">{c.cell_key}</td>
                     <td className="px-4 py-3 text-gray-400 text-xs">v{c.version}</td>
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={() => setEditorCell(c)}
+                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium transition-colors cursor-pointer border ${
+                          hasCard
+                            ? "bg-green-50 text-green-700 border-green-200 hover:bg-green-100"
+                            : "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100"
+                        }`}
+                      >
+                        {hasCard ? "已就绪" : "待填写"}
+                      </button>
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
 
-          {/* Matrix preview */}
+          {/* Quick-add single cell */}
+          <form onSubmit={handleQuickAdd} className="bg-white border border-gray-200 rounded-xl p-4 mb-8 flex flex-wrap gap-3 items-end">
+            <div className="flex flex-col gap-1 flex-1 min-w-[140px]">
+              <label className="text-xs text-gray-500">JTBD 任务</label>
+              <input
+                type="text"
+                value={quickAdd.jtbd}
+                onChange={(e) => setQuickAdd((prev) => ({ ...prev, jtbd: e.target.value }))}
+                placeholder="邀请协作者+权限分级"
+                className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              />
+            </div>
+            <div className="flex flex-col gap-1 flex-1 min-w-[120px]">
+              <label className="text-xs text-gray-500">旅程阶段</label>
+              <input
+                type="text"
+                value={quickAdd.journey_stage}
+                onChange={(e) => setQuickAdd((prev) => ({ ...prev, journey_stage: e.target.value }))}
+                placeholder="首次配置"
+                className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              />
+            </div>
+            <div className="flex flex-col gap-1 flex-1 min-w-[120px]">
+              <label className="text-xs text-gray-500">页面 / 状态</label>
+              <input
+                type="text"
+                value={quickAdd.page_state}
+                onChange={(e) => setQuickAdd((prev) => ({ ...prev, page_state: e.target.value }))}
+                placeholder="邀请弹窗"
+                className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={quickAddLoading || !quickAdd.jtbd.trim() || !quickAdd.journey_stage.trim() || !quickAdd.page_state.trim()}
+              className="px-4 py-1.5 text-sm bg-gray-800 text-white rounded-lg hover:bg-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {quickAddLoading ? "添加中…" : "+ 添加格子"}
+            </button>
+          </form>
           <div className="text-gray-500 text-xs mb-1">覆盖矩阵预览</div>
           <h2 className="text-base font-semibold mb-1">场景 × 竞品</h2>
           <p className="text-gray-400 text-xs mb-3">
@@ -137,6 +221,26 @@ export default function GridPage() {
             </div>
           </div>
         </>
+      )}
+
+      {/* Mapping card editor modal */}
+      {editorCell && (
+        <MappingCardEditor
+          cellId={editorCell.id}
+          cellLabel={`${editorCell.journey_stage} · ${editorCell.page_state}`}
+          onClose={() => setEditorCell(null)}
+        />
+      )}
+
+      {/* Grid initialization wizard */}
+      {showWizard && (
+        <CellWizard
+          onDone={(newCells) => {
+            setCells((prev) => [...prev, ...newCells]);
+            setShowWizard(false);
+          }}
+          onClose={() => setShowWizard(false)}
+        />
       )}
     </div>
   );
