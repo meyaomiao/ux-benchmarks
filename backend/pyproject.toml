@@ -18,6 +18,7 @@ dependencies = [
     "pillow>=10.3",
     "imagehash>=4.3",
     "anthropic>=0.28",
+    "duckduckgo-search>=6.0",
     "python-multipart>=0.0.9",
     "python-dotenv>=1.0",
 ]

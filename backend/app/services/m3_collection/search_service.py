@@ -1,16 +1,13 @@
 """Search engine integration for live collection (A1).
 
 Converts query strings (like "site:help.* role permissions setup") into real
-URLs by calling a search API, so the HelpDocsAdapter and other adapters can
+URLs by calling a search engine, so the HelpDocsAdapter and other adapters can
 fetch actual content in live mode.
 
-Supported providers:
-  - brave   (default) — https://brave.com/search/api/  free tier 2000 req/month
-  - serpapi             — https://serpapi.com/          free tier 100 req/month
-
-When settings.use_collection_mock is True OR settings.search_api_key is empty,
-_mock_search() is used: it returns a short list of plausible-looking URLs derived
-from the query text. This lets the whole chain run offline / in CI without a key.
+Supported providers (in priority order):
+  1. mock          -- always used when use_collection_mock=True
+  2. brave/serpapi -- used when SEARCH_API_KEY is set in .env
+  3. duckduckgo    -- default fallback, zero config, no API key needed
 
 Usage:
     from app.services.m3_collection.search_service import resolve_queries_to_urls
@@ -20,15 +17,13 @@ from __future__ import annotations
 
 import logging
 import re
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import urlparse
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# How many result URLs to request per query.
 _RESULTS_PER_QUERY = 5
-# Hard cap on total URLs returned for a query bundle (guards against API cost).
 _MAX_URLS_TOTAL = 20
 
 
@@ -37,23 +32,16 @@ _MAX_URLS_TOTAL = 20
 # ---------------------------------------------------------------------------
 
 def _mock_search(query: str, n: int = _RESULTS_PER_QUERY) -> list[str]:
-    """Return plausible-looking URLs without any network call.
-
-    Derives a slug from the query keywords and mixes in a few realistic-looking
-    help/docs domain patterns. Deterministic given the same query.
-    """
-    # Extract the site: scope from the query if present (e.g. "site:help.*")
+    """Return plausible-looking URLs without any network call."""
     site_match = re.search(r"site:([\w.*-]+)", query)
     raw_domain = site_match.group(1) if site_match else "help.competitor.example.com"
-    # Replace wildcard with a concrete subdomain for URL realism.
     domain = raw_domain.replace(".*", ".example.com").replace("*", "example.com")
     if not domain.startswith("http"):
         domain = "https://" + domain
 
-    # Build a slug from non-operator words.
     words = re.sub(r"site:\S+", "", query)
     words = re.sub(r"[^\w\s-]", " ", words).split()
-    slug_words = [w for w in words if w and not w.lower() in
+    slug_words = [w for w in words if w and w.lower() not in
                   {"how", "to", "the", "a", "an", "and", "or", "of", "in", "for"}]
     base_slug = "-".join(slug_words[:5]).lower() or "help-article"
 
@@ -68,15 +56,36 @@ def _mock_search(query: str, n: int = _RESULTS_PER_QUERY) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Brave Search
+# DuckDuckGo (default, no API key needed)
+# ---------------------------------------------------------------------------
+
+def _duckduckgo_search(query: str, n: int) -> list[str]:
+    """Search via duckduckgo_search package -- no API key required.
+
+    Uses DDG's internal API. Suitable for development and moderate production
+    use. Raises on failure -- caller catches and falls back to mock.
+    """
+    from duckduckgo_search import DDGS  # lazy import
+
+    urls: list[str] = []
+    with DDGS() as ddgs:
+        for r in ddgs.text(query, max_results=n):
+            href = r.get("href") or r.get("url")
+            if href:
+                urls.append(href)
+    return urls[:n]
+
+
+# ---------------------------------------------------------------------------
+# Brave Search (optional, requires SEARCH_API_KEY)
 # ---------------------------------------------------------------------------
 
 def _brave_search(query: str, n: int) -> list[str]:
-    """Call Brave Web Search API and return result URLs.
+    """Call Brave Web Search API -- requires SEARCH_API_KEY.
 
-    Raises on HTTP or parse error — caller should catch and fall back to mock.
+    Raises on HTTP or parse error.
     """
-    import httpx  # lazy import — not needed in mock mode
+    import httpx  # lazy import
 
     resp = httpx.get(
         "https://api.search.brave.com/res/v1/web/search",
@@ -95,13 +104,13 @@ def _brave_search(query: str, n: int) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# SerpAPI
+# SerpAPI (optional, requires SEARCH_API_KEY)
 # ---------------------------------------------------------------------------
 
 def _serpapi_search(query: str, n: int) -> list[str]:
-    """Call SerpAPI and return organic result URLs.
+    """Call SerpAPI -- requires SEARCH_API_KEY.
 
-    Raises on HTTP or parse error — caller should catch and fall back to mock.
+    Raises on HTTP or parse error.
     """
     import httpx  # lazy import
 
@@ -121,21 +130,36 @@ def _serpapi_search(query: str, n: int) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def search_urls(query: str, n: int = _RESULTS_PER_QUERY) -> list[str]:
-    """Return up to `n` URLs for `query`, using the configured search provider.
+    """Return up to `n` URLs for `query`.
 
-    Always returns something (falls back to mock on any failure).
+    Provider selection order:
+      1. Mock         -- when use_collection_mock=True
+      2. Brave/SerpAPI-- when SEARCH_API_KEY is set in .env
+      3. DuckDuckGo   -- default, zero config, no key needed
+      4. Mock fallback-- on any failure
+
+    Always returns something.
     """
-    use_mock = settings.use_collection_mock or not settings.search_api_key
-    if use_mock:
+    if settings.use_collection_mock:
         return _mock_search(query, n)
 
+    # Premium provider if explicitly configured.
+    if settings.search_api_key:
+        try:
+            if settings.search_api_provider == "serpapi":
+                return _serpapi_search(query, n)
+            return _brave_search(query, n)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "search_service: %s failed for %r, trying DDG: %s",
+                settings.search_api_provider, query[:60], exc,
+            )
+
+    # Default: DuckDuckGo, works with zero configuration.
     try:
-        if settings.search_api_provider == "serpapi":
-            return _serpapi_search(query, n)
-        return _brave_search(query, n)
-    except Exception as exc:  # noqa: BLE001 — network is best-effort
-        logger.warning("search_service: %s search failed for %r, using mock: %s",
-                       settings.search_api_provider, query[:60], exc)
+        return _duckduckgo_search(query, n)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("search_service: DDG failed for %r, using mock: %s", query[:60], exc)
         return _mock_search(query, n)
 
 
@@ -147,8 +171,7 @@ def resolve_queries_to_urls(
     """Resolve a list of query strings into a deduplicated URL list.
 
     Queries that already look like http(s) URLs are passed through unchanged.
-    Non-URL queries are resolved via search_urls(). The total is capped at
-    `max_total` to keep API cost bounded.
+    Non-URL queries are resolved via search_urls(). Total capped at max_total.
     """
     seen: set[str] = set()
     urls: list[str] = []
@@ -158,12 +181,10 @@ def resolve_queries_to_urls(
             break
         parsed = urlparse(query.strip())
         if parsed.scheme in ("http", "https") and parsed.netloc:
-            # Already a URL — pass through.
             if query not in seen:
                 seen.add(query)
                 urls.append(query)
         else:
-            # Search query — resolve to URLs.
             remaining = max_total - len(urls)
             for url in search_urls(query, n=min(_RESULTS_PER_QUERY, remaining)):
                 if url not in seen:
