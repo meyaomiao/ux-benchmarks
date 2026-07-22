@@ -38,6 +38,7 @@ from app.services.m3_collection.contracts import (
     RubricBreakdown,
     Score,
 )
+from app.utils.robust_json import extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -389,12 +390,6 @@ def _media_type(path: str) -> str:
 
 
 def _extract_json(raw: str) -> dict:
-    """Pull the first JSON object out of a model response, tolerant of fences."""
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if not match:
-        raise ValueError(f"no JSON object found in model response: {raw[:200]!r}")
-    return json.loads(match.group(0))
+    """Pull the first JSON object out of a model response, tolerant of fences
+    and of unescaped inner quotes (common in Chinese reasoning text)."""
+    return extract_json(raw)

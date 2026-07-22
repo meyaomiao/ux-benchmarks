@@ -10,6 +10,7 @@ import re
 
 from app.core.config import settings
 from app.schemas.m1 import GeneratedCell, GridGenerationRequest, GridGenerationResponse
+from app.utils.robust_json import extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +86,7 @@ def generate_grid(req: GridGenerationRequest) -> GridGenerationResponse:
             messages=[{"role": "user", "content": _prompt(req)}],
         )
         raw = "".join(b.text for b in msg.content if b.type == "text")
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        data = json.loads(match.group(0) if match else raw)
+        data = extract_json(raw)
 
         cells = [GeneratedCell(**c) for c in data.get("cells", [])]
         return GridGenerationResponse(

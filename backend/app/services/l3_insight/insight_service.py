@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.errors import AppError
 from app.models.l3_insight import Insight
+from app.utils.robust_json import extract_json
 from app.models.m4_annotation import Observation
 from app.models.m3_collection import Asset
 from app.models.m0_registry import CompetitorEntity
@@ -182,8 +183,7 @@ def _call_claude(intent: str, comp_name: str, obs_texts: list[str]) -> dict:
         messages=[{"role": "user", "content": prompt}],
     )
     raw = "".join(b.text for b in msg.content if b.type == "text")
-    m = re.search(r"\{.*\}", raw, re.DOTALL)
-    return json.loads(m.group(0) if m else raw)
+    return extract_json(raw)
 
 
 def _save_insight(
