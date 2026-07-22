@@ -61,3 +61,41 @@ class ObservationRead(BaseModel):
     accepted_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
+# L3 Insight schemas
+# ---------------------------------------------------------------------------
+
+class InsightGenerateRequest(BaseModel):
+    cell_id: UUID
+    competitor_id: UUID
+
+
+class InsightRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    cell_id: UUID
+    competitor_id: UUID
+    claim: str
+    analysis: Optional[str] = None
+    recommendation: Optional[str] = None
+    design_principle: Optional[str] = None
+    limits: Optional[str] = None
+    source_observation_ids: list = []
+    confidence: str
+    generated_by: str
+    is_draft: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class InsightUpdate(BaseModel):
+    claim: Optional[str] = None
+    analysis: Optional[str] = None
+    recommendation: Optional[str] = None
+    design_principle: Optional[str] = None
+    limits: Optional[str] = None
+    confidence: Optional[str] = None
+    is_draft: Optional[bool] = None

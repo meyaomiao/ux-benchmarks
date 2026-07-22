@@ -82,3 +82,45 @@ async def get_observation(observation_id: str):
 @router.post("/observations/{observation_id}/claims", status_code=201)
 async def add_claim(observation_id: str):
     raise HTTPException(status_code=501, detail="Not implemented — see issue #25")
+
+
+# --- L3 Insights -----------------------------------------------------------
+
+from app.schemas.m4 import InsightGenerateRequest, InsightRead, InsightUpdate  # noqa: E402
+from app.services.l3_insight import insight_service  # noqa: E402
+
+
+@router.get("/insights", response_model=list[InsightRead])
+async def list_insights(
+    cell_id: UUID | None = None,
+    competitor_id: UUID | None = None,
+    is_draft: bool | None = None,
+    db: Session = Depends(get_db),
+):
+    return insight_service.list_insights(db, cell_id, competitor_id, is_draft)
+
+
+@router.post("/insights/generate", response_model=InsightRead, status_code=201)
+async def generate_insight(data: InsightGenerateRequest, db: Session = Depends(get_db)):
+    """Generate a draft L3 insight from accepted evidence using Claude (mock fallback)."""
+    return insight_service.generate_insight(db, data.cell_id, data.competitor_id)
+
+
+@router.get("/insights/{insight_id}", response_model=InsightRead)
+async def get_insight(insight_id: UUID, db: Session = Depends(get_db)):
+    obj = insight_service.get_insight(db, insight_id)
+    if not obj:
+        raise AppError("NOT_FOUND", f"Insight {insight_id} not found", 404)
+    return obj
+
+
+@router.patch("/insights/{insight_id}", response_model=InsightRead)
+async def update_insight(
+    insight_id: UUID, data: InsightUpdate, db: Session = Depends(get_db)
+):
+    return insight_service.update_insight(db, insight_id, data.model_dump(exclude_none=True))
+
+
+@router.delete("/insights/{insight_id}", status_code=204)
+async def delete_insight(insight_id: UUID, db: Session = Depends(get_db)):
+    insight_service.delete_insight(db, insight_id)
