@@ -137,3 +137,78 @@ export const mockCoverage: CoverageRow[] = [
   { cell_id: "g5", competitor_id: "c1000000-0000-0000-0000-000000000001", status: "PROBING", independent_source_count: 0, latest_captured_at: null, coverage_confidence: 0.15, evidence_type_breakdown: {}, tier: "tier-1" },
   { cell_id: "g5", competitor_id: "c1000000-0000-0000-0000-000000000002", status: "UNPROBED", independent_source_count: 0, latest_captured_at: null, coverage_confidence: 0, evidence_type_breakdown: {}, tier: "tier-1" },
 ];
+
+// Mock shortlist items — rich AI-scored evidence, one per cell×competitor that has assets.
+// These demonstrate what the evidence view should feel like.
+import type { ShortlistItem } from "./types";
+
+export const mockShortlist: Record<string, ShortlistItem[]> = {
+  "g1|c1000000-0000-0000-0000-000000000001": [
+    {
+      id: "a0001", cell_id: "g1", competitor_id: "c1000000-0000-0000-0000-000000000001",
+      source_url: "https://help.linear.app/docs/invite-members",
+      source_type: "help_docs", title: "Invite members to your workspace — Linear Help",
+      snippet: "Navigate to Settings › Members › Invite people. Enter email addresses and select a role — Member, Admin, or Guest. You can preview each role's permissions before sending.",
+      evidence_type: "observed", ai_score: 0.87,
+      ai_score_breakdown: { state_match: 0.92, product_match: 1.0, version_recency: 0.85, evidence_directness: 0.9, fidelity: 0.7, reasoning: "Step-by-step doc shows the invite modal, role selector, and permission preview. Precisely describes the target UI flow. Marked observed because doc content is reproducible.", scored_by: "claude-vision" },
+      rights_status: "third_party_official", media_disposition: "thumbnail_only",
+      captured_at: "2026-07-20T15:30:00Z", image_path_available: false,
+    },
+    {
+      id: "a0002", cell_id: "g1", competitor_id: "c1000000-0000-0000-0000-000000000001",
+      source_url: "https://app.storylane.io/demo/linear-invite-flow",
+      source_type: "interactive_demo", title: "Linear product tour — Invite & Permissions",
+      snippet: "Guided product tour step 2 of 7: the invite modal with role dropdown expanded. Permissions panel visible on the right.",
+      evidence_type: "observed", ai_score: 0.93,
+      ai_score_breakdown: { state_match: 0.95, product_match: 1.0, version_recency: 0.92, evidence_directness: 1.0, fidelity: 0.8, reasoning: "Screenshot from interactive demo shows the exact invite modal with expanded role dropdown and real-time permission preview panel. Target state is directly visible.", scored_by: "claude-vision" },
+      rights_status: "embedded_third_party", media_disposition: "thumbnail_only",
+      captured_at: "2026-07-20T16:00:00Z", image_path_available: true,
+    },
+  ],
+  "g1|c1000000-0000-0000-0000-000000000003": [
+    {
+      id: "a0003", cell_id: "g1", competitor_id: "c1000000-0000-0000-0000-000000000003",
+      source_url: "https://www.notion.so/help/add-members-to-your-workspace",
+      source_type: "help_docs", title: "Add members to your workspace — Notion Help",
+      snippet: "Click Settings & members in the left sidebar. Select Members, then Invite members. Type in email address, choose a role (Workspace owner, Member, or Guest).",
+      evidence_type: "observed", ai_score: 0.74,
+      ai_score_breakdown: { state_match: 0.78, product_match: 1.0, version_recency: 0.7, evidence_directness: 0.8, fidelity: 0.6, reasoning: "Describes the invite flow correctly but does not show permission preview — role list with no contextual permission display. Lower state_match than Linear.", scored_by: "claude-vision" },
+      rights_status: "third_party_official", media_disposition: "thumbnail_only",
+      captured_at: "2026-07-19T10:00:00Z", image_path_available: false,
+    },
+  ],
+  "g2|c1000000-0000-0000-0000-000000000002": [
+    {
+      id: "a0004", cell_id: "g2", competitor_id: "c1000000-0000-0000-0000-000000000002",
+      source_url: "https://help.asana.com/hc/en-us/articles/roles",
+      source_type: "help_docs", title: "Roles and permissions in Asana",
+      snippet: "Asana offers three roles: Guest, Member, and Admin. Guests can only access projects they're invited to. Members can create and edit projects. Admins manage billing and members.",
+      evidence_type: "claimed", ai_score: 0.41,
+      ai_score_breakdown: { state_match: 0.3, product_match: 1.0, version_recency: 0.6, evidence_directness: 0.5, fidelity: 0.4, reasoning: "Text describes roles but shows no UI. The role-selection interface itself is not visible. Classified as claimed because no screenshot of the role picker exists in this article.", scored_by: "claude-vision" },
+      rights_status: "third_party_official", media_disposition: "thumbnail_only",
+      captured_at: "2026-07-21T09:00:00Z", image_path_available: false,
+    },
+    {
+      id: "a0005", cell_id: "g2", competitor_id: "c1000000-0000-0000-0000-000000000002",
+      source_url: "https://app.arcade.software/share/asana-permissions",
+      source_type: "interactive_demo", title: "Asana demo — Roles & Access",
+      snippet: "Product tour step 4: Member role selected. Permission scope shown as 'Can edit all projects in this team'.",
+      evidence_type: "observed", ai_score: 0.88,
+      ai_score_breakdown: { state_match: 0.9, product_match: 1.0, version_recency: 0.9, evidence_directness: 1.0, fidelity: 0.75, reasoning: "Screenshot from interactive demo clearly shows the role selection state with permission scope text visible. Strong state_match — the target UI is directly shown.", scored_by: "claude-vision" },
+      rights_status: "embedded_third_party", media_disposition: "thumbnail_only",
+      captured_at: "2026-07-21T09:30:00Z", image_path_available: true,
+    },
+  ],
+  "g4|c1000000-0000-0000-0000-000000000001": [
+    {
+      id: "a0006", cell_id: "g4", competitor_id: "c1000000-0000-0000-0000-000000000001",
+      source_url: "https://help.linear.app/docs/permission-conflict",
+      source_type: "help_docs", title: "Handling permission conflicts — Linear",
+      snippet: "If a member's role conflicts with a project-level override, Linear displays a yellow warning banner: 'This member's workspace role (Guest) conflicts with their project permission (Editor)'. Click Resolve to choose which takes precedence.",
+      evidence_type: "observed", ai_score: 0.81,
+      ai_score_breakdown: { state_match: 0.85, product_match: 1.0, version_recency: 0.8, evidence_directness: 0.85, fidelity: 0.65, reasoning: "Describes the permission conflict warning state in detail with specific UI copy. High state_match because the conflict-resolution UI is described precisely and reproducibly.", scored_by: "claude-vision" },
+      rights_status: "third_party_official", media_disposition: "thumbnail_only",
+      captured_at: "2026-07-20T11:00:00Z", image_path_available: false,
+    },
+  ],
+};
