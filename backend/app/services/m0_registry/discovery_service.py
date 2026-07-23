@@ -92,7 +92,7 @@ _MOCK_SUGGESTIONS: list[dict] = [
 ]
 
 
-def _call_claude(category: str, known_products: list[str]) -> list[dict]:
+def _call_claude(category: str, known_products: list[str], tier: str | None = None) -> list[dict]:
     import anthropic
 
     kw: dict = {"api_key": settings.anthropic_api_key}
@@ -101,26 +101,47 @@ def _call_claude(category: str, known_products: list[str]) -> list[dict]:
     client = anthropic.Anthropic(**kw)
 
     known = "、".join(known_products) if known_products else "（未指定）"
-    prompt = (
-        f"产品品类：{category}\n"
-        f"已知竞品：{known}\n\n"
-        "请尽可能全面地推荐值得研究的 UX 设计标杆（不包括已知竞品），分三层：\n"
-        "1. direct（直接竞品）：同品类、同目标用户，列出 8~12 个，覆盖头部、"
-        "新锐、垂直细分玩家，宁多勿漏\n"
-        "2. indirect（间接竞品）：不同品类但有重叠 jobs-to-be-done，4~6 个\n"
-        "3. cross_industry（跨行业标杆）：不同行业但在相关交互场景领先，4~6 个\n\n"
-        "要求：\n"
-        "- 每个产品名唯一，不要重复；每条 rationale 必须对应正确的产品\n"
-        "- rationale 说明为什么从 UX 角度值得研究（不是市场份额，是设计价值）\n"
-        "- 覆盖不同地区（含中国本土产品）和不同规模的玩家，提高样本代表性\n\n"
-        "返回 JSON 数组，每项字段：\n"
-        '{"name":"...","tier":"direct|indirect|cross_industry","tier_label":"直接竞品|间接竞品|跨行业标杆",'
-        '"rationale":"...","official_domain":"...或null","help_center_domain":"...或null"}\n'
-        "只返回 JSON 数组，无其他文字。"
-    )
+
+    # Per-tier spec so a single tier can be generated in isolation (parallel).
+    _TIER_SPEC = {
+        "direct": ("direct（直接竞品）", "直接竞品", "同品类、同目标用户，列出 8 个，覆盖头部、新锐、垂直细分玩家，含中国本土产品"),
+        "indirect": ("indirect（间接竞品）", "间接竞品", "不同品类但有重叠 jobs-to-be-done，列出 5 个"),
+        "cross_industry": ("cross_industry（跨行业标杆）", "跨行业标杆", "不同行业但在相关交互场景领先，列出 5 个"),
+    }
+
+    if tier:
+        code, label, spec = _TIER_SPEC[tier]
+        prompt = (
+            f"产品品类：{category}\n"
+            f"已知竞品：{known}\n\n"
+            f"只推荐一类值得研究的 UX 设计标杆（不包括已知竞品）：{code}——{spec}\n\n"
+            "要求：\n"
+            "- 每个产品名唯一，不要重复\n"
+            "- rationale 一句话（40 字以内）说清该产品在 UX 上最值得研究的点\n"
+            f'返回 JSON 数组，每项：{{"name":"...","tier":"{tier}","tier_label":"{label}",'
+            '"rationale":"...","official_domain":"...或null","help_center_domain":"...或null"}\n'
+            "只返回 JSON 数组，无其他文字。"
+        )
+        max_tokens = 2000
+    else:
+        prompt = (
+            f"产品品类：{category}\n"
+            f"已知竞品：{known}\n\n"
+            "请尽可能全面地推荐值得研究的 UX 设计标杆（不包括已知竞品），分三层：\n"
+            "1. direct（直接竞品）：同品类、同目标用户，列出 8~12 个\n"
+            "2. indirect（间接竞品）：不同品类但有重叠 jobs-to-be-done，4~6 个\n"
+            "3. cross_industry（跨行业标杆）：不同行业但相关交互领先，4~6 个\n\n"
+            "要求：每个产品名唯一；rationale 说明 UX 设计价值；含中国本土产品。\n"
+            "返回 JSON 数组，每项字段：\n"
+            '{"name":"...","tier":"direct|indirect|cross_industry","tier_label":"直接竞品|间接竞品|跨行业标杆",'
+            '"rationale":"...","official_domain":"...或null","help_center_domain":"...或null"}\n'
+            "只返回 JSON 数组，无其他文字。"
+        )
+        max_tokens = 8000
+
     msg = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=8000,
+        max_tokens=max_tokens,
         system=_SYSTEM,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -136,23 +157,24 @@ def _call_claude(category: str, known_products: list[str]) -> list[dict]:
 def discover_competitors(
     category: str,
     known_products: list[str] | None = None,
+    tier: str | None = None,
 ) -> list[DiscoverySuggestion]:
     """Return competitor discovery suggestions for the given category.
 
-    Uses Claude when a key is configured and mock mode is off; otherwise
-    returns the seeded mock list (adjusted to mention the requested category).
+    When `tier` is given, only that tier is generated (fast, for parallel calls);
+    otherwise all three tiers in one call. Falls back to seeded mock on failure.
     """
     known = known_products or []
     use_mock = settings.use_collection_mock or not settings.anthropic_api_key
 
     if use_mock:
-        raw = _MOCK_SUGGESTIONS
+        raw = [s for s in _MOCK_SUGGESTIONS if not tier or s["tier"] == tier]
     else:
         try:
-            raw = _call_claude(category, known)
+            raw = _call_claude(category, known, tier)
         except Exception as exc:
             logger.warning("discover_competitors: Claude failed, using mock: %s", exc)
-            raw = _MOCK_SUGGESTIONS
+            raw = [s for s in _MOCK_SUGGESTIONS if not tier or s["tier"] == tier]
 
     known_lower = {p.lower() for p in known}
     seen: set[str] = set()

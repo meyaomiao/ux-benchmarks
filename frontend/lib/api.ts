@@ -137,6 +137,7 @@ export const api = {
   discoverCompetitors: async (
     category: string,
     knownProducts: string[] = [],
+    tier?: "direct" | "indirect" | "cross_industry",
   ): Promise<DiscoverySuggestion[]> => {
     if (USE_MOCK) {
       await new Promise(r => setTimeout(r, 2000));
@@ -149,12 +150,12 @@ export const api = {
         { name: "Stripe Dashboard", tier: "cross_industry", tier_label: "跨行业标杆", rationale: "金融工具在「复杂数据可读性」和「不可逆操作确认」上有极高设计要求，空状态引导和风险操作二次确认值得跨行业借鉴。", official_domain: "stripe.com", help_center_domain: "stripe.com/docs" },
         { name: "Vercel", tier: "cross_industry", tier_label: "跨行业标杆", rationale: "DevOps 工具在「任务进度可视化」和「配置→部署→观测」全链路体验上有独到设计，Deployment 状态机是同类场景参考标杆。", official_domain: "vercel.com", help_center_domain: "vercel.com/docs" },
       ];
-      return allMock.filter(s => !knownLower.has(s.name.toLowerCase()));
+      return allMock.filter(s => (!tier || s.tier === tier) && !knownLower.has(s.name.toLowerCase()));
     }
     const res = await pfetch(`${BASE}/m0/discover`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ category, known_products: knownProducts }),
+      body: JSON.stringify({ category, known_products: knownProducts, tier }),
     });
     if (!res.ok) throw new Error(await res.text());
     return res.json();

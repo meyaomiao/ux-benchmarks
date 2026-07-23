@@ -129,7 +129,8 @@ async def discover_competitors_endpoint(
     if not category:
         raise AppError("BAD_REQUEST", "category is required", 400)
     known = data.get("known_products") or []
-    suggestions = discover_competitors(category, known)
+    tier = data.get("tier") or None  # optional single-tier generation (parallel)
+    suggestions = discover_competitors(category, known, tier)
     return [
         {
             "name": s.name,

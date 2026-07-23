@@ -57,15 +57,28 @@ function DiscoveryPanel({
     setDiscovering(true);
     setError(null);
     setSuggestions([]);
-    try {
-      const results = await api.discoverCompetitors(category.trim(), knownProducts);
-      setSuggestions(results);
-      onCategoryChange(category.trim());  // carry the category to the next step
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "发现失败");
-    } finally {
-      setDiscovering(false);
-    }
+    onCategoryChange(category.trim());  // carry the category to the next step
+    const cat = category.trim();
+    // Fire the three tiers in parallel; each appends as it returns so the user
+    // sees the first batch in ~20s instead of waiting ~60s for one big call.
+    const tiers = ["direct", "indirect", "cross_industry"] as const;
+    let anyOk = false;
+    await Promise.all(
+      tiers.map(async (t) => {
+        try {
+          const part = await api.discoverCompetitors(cat, knownProducts, t);
+          anyOk = true;
+          setSuggestions((prev) => {
+            const seen = new Set(prev.map((s) => s.name.toLowerCase()));
+            return [...prev, ...part.filter((s) => !seen.has(s.name.toLowerCase()))];
+          });
+        } catch {
+          // one tier failing shouldn't blank the whole panel
+        }
+      })
+    );
+    if (!anyOk) setError("发现失败，请重试");
+    setDiscovering(false);
   }
 
   const [adding, setAdding] = useState<Set<string>>(new Set());
@@ -135,8 +148,10 @@ function DiscoveryPanel({
               输入品类名称，点击「AI 发现」获取推荐
             </div>
           )}
-          {discovering && (
-            <div className="py-12 text-center text-gray-400 text-sm">AI 正在分析中…</div>
+          {discovering && suggestions.length === 0 && (
+            <div className="py-12 text-center text-gray-400 text-sm">
+              AI 正在分析中…（三层并行，最快一层约 20 秒出结果）
+            </div>
           )}
           {tierOrder.map(tier => {
             const items = grouped[tier];
@@ -172,6 +187,9 @@ function DiscoveryPanel({
               </div>
             );
           })}
+          {discovering && suggestions.length > 0 && (
+            <div className="py-3 text-center text-gray-400 text-xs">仍在加载其余分层…</div>
+          )}
         </div>
 
         {/* Footer — next step */}
