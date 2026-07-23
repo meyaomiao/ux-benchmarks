@@ -13,6 +13,9 @@ class MappingCard(TimestampMixin, Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True
+    )
     cell_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("grid_cells.id"), unique=True, nullable=False
     )

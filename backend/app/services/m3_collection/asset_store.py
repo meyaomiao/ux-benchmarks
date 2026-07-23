@@ -95,7 +95,14 @@ def persist_candidate(
         # DEDUP: write-once — never update existing content, just return it.
         return existing, False
 
+    # project_id derived from the cell (authoritative) so assets stay scoped.
+    from app.models.m1_grid import GridCell
+    project_id = db.execute(
+        select(GridCell.project_id).where(GridCell.id == candidate.cell_id)
+    ).scalar_one()
+
     asset = Asset(
+        project_id=project_id,
         cell_id=candidate.cell_id,
         competitor_id=candidate.competitor_id,
         source_url=candidate.source_url,

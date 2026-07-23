@@ -1,7 +1,7 @@
 // API client. Falls back to mock data when NEXT_PUBLIC_USE_MOCK !== "false".
 // Backend endpoints mirror docs/collection-phase-spec-v2.md (M0 / M1).
 
-import type { Competitor, LexiconEntry, GridCell, ListResponse, CoverageRow, ShortlistResponse, MappingCard, QueueItem, Insight, Report, ReportAudience, ReportFormat, DiscoverySuggestion } from "./types";
+import type { Competitor, LexiconEntry, GridCell, ListResponse, CoverageRow, ShortlistResponse, MappingCard, QueueItem, Insight, Report, ReportAudience, ReportFormat, DiscoverySuggestion, Project } from "./types";
 import { mockCompetitors, mockLexicon, mockCells, mockCoverage, mockShortlist, mockMappingCards, mockReports, mockReportBody, mockInsights } from "./mock";
 
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK !== "false";
@@ -9,6 +9,26 @@ const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK !== "false";
 // Next.js dev rewrite proxy's 30s hard timeout, which kills slow Claude calls.
 // Falls back to the same-origin proxy path when the env var isn't set.
 const BASE = process.env.NEXT_PUBLIC_API_BASE || "/api/v1";
+
+const PROJECT_KEY = "ux_project_id";
+
+/** Current project id from localStorage (multi-project scoping, #47). */
+export function getCurrentProjectId(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(PROJECT_KEY);
+}
+
+export function setCurrentProjectId(id: string): void {
+  if (typeof window !== "undefined") localStorage.setItem(PROJECT_KEY, id);
+}
+
+/** fetch wrapper that injects the X-Project-Id header on every request. */
+function pfetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const pid = getCurrentProjectId();
+  const headers = new Headers(init.headers || {});
+  if (pid) headers.set("X-Project-Id", pid);
+  return fetch(url, { ...init, headers });
+}
 
 function paginate<T>(items: T[]): ListResponse<T> {
   return { items, total: items.length, limit: items.length, offset: 0, has_next: false };
@@ -20,7 +40,7 @@ async function get<T>(path: string, fallback: T): Promise<T> {
     await new Promise((r) => setTimeout(r, 150));
     return fallback;
   }
-  const res = await fetch(`${BASE}${path}`);
+  const res = await pfetch(`${BASE}${path}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail || `Request failed: ${res.status}`);
@@ -30,6 +50,37 @@ async function get<T>(path: string, fallback: T): Promise<T> {
 
 export const api = {
   useMock: USE_MOCK,
+
+  // Projects — top-level workspace (multi-project #47)
+  listProjects: async (): Promise<Project[]> => {
+    if (USE_MOCK) {
+      await new Promise((r) => setTimeout(r, 100));
+      return [{ id: "mock-proj", name: "示例项目", category: "项目管理工具", description: "", created_at: new Date().toISOString(), updated_at: new Date().toISOString() }];
+    }
+    const res = await pfetch(`${BASE}/projects`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
+  createProject: async (name: string, category = "", description = ""): Promise<Project> => {
+    if (USE_MOCK) {
+      await new Promise((r) => setTimeout(r, 150));
+      return { id: crypto.randomUUID(), name, category, description, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    }
+    const res = await pfetch(`${BASE}/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, category, description }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
+  deleteProject: async (id: string): Promise<void> => {
+    if (USE_MOCK) { await new Promise((r) => setTimeout(r, 120)); return; }
+    const res = await pfetch(`${BASE}/projects/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(await res.text());
+  },
 
   // M0 · Competitors
   listCompetitors: () =>
@@ -63,7 +114,7 @@ export const api = {
         updated_at: now,
       };
     }
-    const res = await fetch(`${BASE}/m0/competitors`, {
+    const res = await pfetch(`${BASE}/m0/competitors`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -77,7 +128,7 @@ export const api = {
       await new Promise((r) => setTimeout(r, 150));
       return { mode: "hard" };
     }
-    const res = await fetch(`${BASE}/m0/competitors/${id}`, { method: "DELETE" });
+    const res = await pfetch(`${BASE}/m0/competitors/${id}`, { method: "DELETE" });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   },
@@ -100,7 +151,7 @@ export const api = {
       ];
       return allMock.filter(s => !knownLower.has(s.name.toLowerCase()));
     }
-    const res = await fetch(`${BASE}/m0/discover`, {
+    const res = await pfetch(`${BASE}/m0/discover`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ category, known_products: knownProducts }),
@@ -144,7 +195,7 @@ export const api = {
         updated_at: new Date().toISOString(),
       } as GridCell;
     }
-    const res = await fetch(`${BASE}/m1/cells`, {
+    const res = await pfetch(`${BASE}/m1/cells`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -157,7 +208,7 @@ export const api = {
   // so the UI flow is exercisable without a backend.
   acceptAsset: async (assetId: string, observationFields: Record<string, unknown> = {}) => {
     if (USE_MOCK) { await new Promise((r) => setTimeout(r, 120)); return { ok: true, asset_id: assetId }; }
-    const res = await fetch(`${BASE}/m4/shortlist/accept`, {
+    const res = await pfetch(`${BASE}/m4/shortlist/accept`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ asset_id: assetId, observation_fields: observationFields }),
     });
@@ -166,7 +217,7 @@ export const api = {
   },
   rejectAsset: async (assetId: string, reason?: string) => {
     if (USE_MOCK) { await new Promise((r) => setTimeout(r, 120)); return { ok: true, asset_id: assetId }; }
-    const res = await fetch(`${BASE}/m4/shortlist/reject`, {
+    const res = await pfetch(`${BASE}/m4/shortlist/reject`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ asset_id: assetId, reason }),
     });
@@ -195,7 +246,7 @@ export const api = {
         generated_by: "mock",
       };
     }
-    const res = await fetch(`${BASE}/m1/cells/generate`, {
+    const res = await pfetch(`${BASE}/m1/cells/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ category, known_products: knownProducts }),
@@ -211,7 +262,7 @@ export const api = {
       await new Promise((r) => setTimeout(r, 150));
       return [];
     }
-    const res = await fetch(`${BASE}/m3/queue`);
+    const res = await pfetch(`${BASE}/m3/queue`);
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     return Array.isArray(data) ? data : (data.items ?? []);
@@ -222,7 +273,7 @@ export const api = {
       await new Promise((r) => setTimeout(r, 200));
       return { ok: true };
     }
-    const res = await fetch(`${BASE}/m3/queue/pin`, {
+    const res = await pfetch(`${BASE}/m3/queue/pin`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cell_id: cellId, competitor_id: competitorId }),
@@ -259,7 +310,7 @@ export const api = {
         competitor_id: payload.competitor_id,
       };
     }
-    const res = await fetch(`${BASE}/m3/manual-screenshot`, {
+    const res = await pfetch(`${BASE}/m3/manual-screenshot`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -276,7 +327,7 @@ export const api = {
       await new Promise(r => setTimeout(r, 400));
       return { cells: 7, competitors: 2, pairs_total: 14, newly_queued: 14 };
     }
-    const res = await fetch(`${BASE}/m3/queue/enqueue-all`, { method: "POST" });
+    const res = await pfetch(`${BASE}/m3/queue/enqueue-all`, { method: "POST" });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   },
@@ -289,7 +340,7 @@ export const api = {
       await new Promise(r => setTimeout(r, 1500));
       return { state: "SHORTLIST_READY", candidates_found: 5, passed: 3, persisted: 3 };
     }
-    const res = await fetch(`${BASE}/m3/probe-now`, {
+    const res = await pfetch(`${BASE}/m3/probe-now`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cell_id: cellId, competitor_id: competitorId }),
@@ -307,14 +358,14 @@ export const api = {
 
   generateReport: async () => {
     if (USE_MOCK) { await new Promise(r => setTimeout(r, 300)); return { generated_at: new Date().toISOString(), note: "mock" }; }
-    const res = await fetch(`${BASE}/m5/reports/generate`, { method: "POST" });
+    const res = await pfetch(`${BASE}/m5/reports/generate`, { method: "POST" });
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   },
 
   downloadReport: async () => {
     if (USE_MOCK) return "# UX Coverage Report\n\nMock mode — no real data.";
-    const res = await fetch(`${BASE}/m5/reports/export.md`);
+    const res = await pfetch(`${BASE}/m5/reports/export.md`);
     if (!res.ok) throw new Error(await res.text());
     return res.text();
   },
@@ -325,7 +376,7 @@ export const api = {
       await new Promise((r) => setTimeout(r, 150));
       return mockMappingCards[cellId] ?? null;
     }
-    const res = await fetch(`${BASE}/m2/mapping-cards/${cellId}`);
+    const res = await pfetch(`${BASE}/m2/mapping-cards/${cellId}`);
     if (res.status === 404) return null;
     if (!res.ok) throw new Error(`getMappingCard failed: ${res.status}`);
     return res.json();
@@ -337,7 +388,7 @@ export const api = {
       await new Promise((r) => setTimeout(r, 120));
       return Object.values(mockMappingCards);
     }
-    const res = await fetch(`${BASE}/m2/mapping-cards?limit=200`);
+    const res = await pfetch(`${BASE}/m2/mapping-cards?limit=200`);
     if (!res.ok) throw new Error(`listMappingCards failed: ${res.status}`);
     const data = await res.json();
     return data.items ?? [];
@@ -357,7 +408,7 @@ export const api = {
         exclusion_criteria: "纯计费/定价页；只提到权限管理但不展示界面的营销文案；与权限无关的功能介绍",
       };
     }
-    const res = await fetch(`${BASE}/m2/mapping-cards/generate`, {
+    const res = await pfetch(`${BASE}/m2/mapping-cards/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cell_id: cellId }),
@@ -378,7 +429,7 @@ export const api = {
     const params = new URLSearchParams();
     if (cellId) params.set("cell_id", cellId);
     if (competitorId) params.set("competitor_id", competitorId);
-    const res = await fetch(`${BASE}/m4/insights?${params}`);
+    const res = await pfetch(`${BASE}/m4/insights?${params}`);
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   },
@@ -411,7 +462,7 @@ export const api = {
       mockInsights.push(ins); // persist to shared mock store
       return ins;
     }
-    const res = await fetch(`${BASE}/m4/insights/generate`, {
+    const res = await pfetch(`${BASE}/m4/insights/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cell_id: cellId, competitor_id: competitorId }),
@@ -425,7 +476,7 @@ export const api = {
       await new Promise(r => setTimeout(r, 150));
       return { id: insightId, ...data } as Insight;
     }
-    const res = await fetch(`${BASE}/m4/insights/${insightId}`, {
+    const res = await pfetch(`${BASE}/m4/insights/${insightId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -440,7 +491,7 @@ export const api = {
       await new Promise(r => setTimeout(r, 150));
       return mockReports;
     }
-    const res = await fetch(`${BASE}/reports`);
+    const res = await pfetch(`${BASE}/reports`);
     if (!res.ok) throw new Error(await res.text());
     return res.json();
   },
@@ -475,7 +526,7 @@ export const api = {
       mockReports.unshift(report);
       return report;
     }
-    const res = await fetch(`${BASE}/reports`, {
+    const res = await pfetch(`${BASE}/reports`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -490,7 +541,7 @@ export const api = {
       if (idx >= 0) mockReports.splice(idx, 1);
       return;
     }
-    const res = await fetch(`${BASE}/reports/${reportId}`, { method: "DELETE" });
+    const res = await pfetch(`${BASE}/reports/${reportId}`, { method: "DELETE" });
     if (!res.ok) throw new Error(await res.text());
   },
 
@@ -522,14 +573,14 @@ export const api = {
     }
     const existing = await api.getMappingCard(cellId);
     if (!existing) {
-      const res = await fetch(`${BASE}/m2/mapping-cards`, {
+      const res = await pfetch(`${BASE}/m2/mapping-cards`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cell_id: cellId, ...data }),
       });
       if (!res.ok) throw new Error(`createMappingCard failed: ${res.status}`);
       return res.json();
     }
-    const res = await fetch(`${BASE}/m2/mapping-cards/${cellId}`, {
+    const res = await pfetch(`${BASE}/m2/mapping-cards/${cellId}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });

@@ -13,10 +13,13 @@ def list_lexicon(
     level: str | None = None,
     term_type: str | None = None,
     language: str | None = None,
+    project_id: UUID | None = None,
 ) -> tuple[list[DomainLexicon], int]:
-    """List lexicon entries with optional filtering."""
+    """List lexicon entries with optional filtering, scoped to a project."""
     query = select(DomainLexicon)
 
+    if project_id is not None:
+        query = query.where(DomainLexicon.project_id == project_id)
     if level is not None:
         query = query.where(DomainLexicon.level == level)
     if term_type is not None:
@@ -41,11 +44,11 @@ def get_lexicon_entry(db: Session, entry_id: UUID) -> DomainLexicon | None:
     return db.execute(query).scalar_one_or_none()
 
 
-def create_lexicon_entry(db: Session, data: LexiconEntryCreate) -> DomainLexicon:
-    """Create a new lexicon entry."""
+def create_lexicon_entry(db: Session, data: LexiconEntryCreate, project_id: UUID) -> DomainLexicon:
+    """Create a new lexicon entry within a project."""
     # exclude_none=True: let server_default ('[]'::jsonb) apply for
     # omitted valid_for_competitors instead of writing NULL.
-    entry = DomainLexicon(**data.model_dump(exclude_none=True))
+    entry = DomainLexicon(project_id=project_id, **data.model_dump(exclude_none=True))
     db.add(entry)
     db.commit()
     db.refresh(entry)

@@ -12,10 +12,13 @@ def list_competitors(
     offset: int = 0,
     status: str | None = None,
     competitor_type: str | None = None,
+    project_id: UUID | None = None,
 ) -> tuple[list[CompetitorEntity], int]:
-    """List competitors with optional filtering."""
+    """List competitors with optional filtering, scoped to a project."""
     query = select(CompetitorEntity)
 
+    if project_id is not None:
+        query = query.where(CompetitorEntity.project_id == project_id)
     if status is not None:
         query = query.where(CompetitorEntity.status == status)
     if competitor_type is not None:
@@ -38,25 +41,26 @@ def get_competitor(db: Session, competitor_id: UUID) -> CompetitorEntity | None:
     return db.execute(query).scalar_one_or_none()
 
 
-def create_competitor(db: Session, data: CompetitorCreate) -> CompetitorEntity:
-    """Create a new competitor."""
-    # Check uniqueness of canonical_name
+def create_competitor(db: Session, data: CompetitorCreate, project_id: UUID) -> CompetitorEntity:
+    """Create a new competitor within a project."""
+    # Uniqueness is per-project (canonical_name unique within the project).
     existing = db.execute(
         select(CompetitorEntity).where(
-            CompetitorEntity.canonical_name == data.canonical_name
+            CompetitorEntity.project_id == project_id,
+            CompetitorEntity.canonical_name == data.canonical_name,
         )
     ).scalar_one_or_none()
 
     if existing:
         raise AppError(
             "DUPLICATE_NAME",
-            f"Competitor with canonical_name '{data.canonical_name}' already exists",
+            f"本项目已存在竞品 '{data.canonical_name}'",
             409,
         )
 
     # exclude_none=True: let server_default (e.g. '[]'::jsonb) apply for
     # omitted JSONB array fields instead of explicitly writing NULL.
-    competitor = CompetitorEntity(**data.model_dump(exclude_none=True))
+    competitor = CompetitorEntity(project_id=project_id, **data.model_dump(exclude_none=True))
     db.add(competitor)
     db.commit()
     db.refresh(competitor)

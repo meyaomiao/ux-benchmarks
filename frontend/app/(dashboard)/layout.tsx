@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { ProjectSwitcher } from "@/components/project-switcher";
 
 const NAV = [
   { href: "/registry", label: "产品实体注册", module: "M0" },
@@ -24,13 +25,14 @@ export default function DashboardLayout({
   return (
     <div className="grid grid-cols-[220px_1fr] min-h-screen">
       <aside className="bg-[#12151c] text-[#c7ccd6] p-5 flex flex-col gap-1">
-        <div className="text-white font-bold text-base mb-1">
+        <div className="text-white font-bold text-base mb-3">
           Benchmarks
           <span className="block text-[#8b93a1] font-normal text-[11px] mt-1">
             UX 设计标杆工具 · 采集阶段
           </span>
         </div>
-        <div className="text-[#5f6774] text-[10px] tracking-wider uppercase mt-4 mb-1">
+        <ProjectSwitcher />
+        <div className="text-[#5f6774] text-[10px] tracking-wider uppercase mt-3 mb-1">
           模块
         </div>
         {NAV.map((item) => {

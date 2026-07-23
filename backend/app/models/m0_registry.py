@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 from typing import Optional
-from sqlalchemy import String, text, Date, UniqueConstraint
+from sqlalchemy import String, text, Date, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
@@ -10,11 +10,18 @@ from app.models.base import TimestampMixin
 
 class CompetitorEntity(TimestampMixin, Base):
     __tablename__ = "competitor_entities"
+    # canonical_name is unique per project, not globally (multi-project #45).
+    __table_args__ = (
+        UniqueConstraint("project_id", "canonical_name", name="uq_competitor_project_name"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
-    canonical_name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True
+    )
+    canonical_name: Mapped[str] = mapped_column(String, nullable=False)
     aliases: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list, server_default=text("'[]'::jsonb"))
     parent_company: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     official_domain: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -33,6 +40,9 @@ class DomainLexicon(TimestampMixin, Base):
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True
     )
     term: Mapped[str] = mapped_column(String, nullable=False)
     term_type: Mapped[str] = mapped_column(String, nullable=False)

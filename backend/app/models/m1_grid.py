@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional
-from sqlalchemy import String, Float, Integer, Boolean, ForeignKey, text
+from sqlalchemy import String, Float, Integer, Boolean, ForeignKey, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
@@ -9,11 +9,18 @@ from app.models.base import TimestampMixin
 
 class GridCell(TimestampMixin, Base):
     __tablename__ = "grid_cells"
+    # cell_key is unique per project, not globally (multi-project #45).
+    __table_args__ = (
+        UniqueConstraint("project_id", "cell_key", name="uq_cell_project_key"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
-    cell_key: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True
+    )
+    cell_key: Mapped[str] = mapped_column(String, nullable=False)
     jtbd: Mapped[str] = mapped_column(String, nullable=False)
     journey_stage: Mapped[str] = mapped_column(String, nullable=False)
     page_state: Mapped[str] = mapped_column(String, nullable=False)

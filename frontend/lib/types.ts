@@ -146,6 +146,16 @@ export interface Insight {
   updated_at: string;
 }
 
+// Projects — top-level workspace container (multi-project #47)
+export interface Project {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // M0 · Competitor discovery (B)
 export type DiscoveryTier = "direct" | "indirect" | "cross_industry";
 

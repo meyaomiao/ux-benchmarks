@@ -32,8 +32,11 @@ def list_cells(
     jtbd: str | None = None,
     journey_stage: str | None = None,
     status: str | None = None,
+    project_id: UUID | None = None,
 ) -> tuple[list[GridCell], int]:
     q = select(GridCell)
+    if project_id is not None:
+        q = q.where(GridCell.project_id == project_id)
     if jtbd:
         q = q.where(GridCell.jtbd.ilike(f"%{jtbd}%"))
     if journey_stage:
@@ -49,15 +52,20 @@ def get_cell(db: Session, cell_id: UUID) -> GridCell | None:
     return db.get(GridCell, cell_id)
 
 
-def get_cell_by_key(db: Session, cell_key: str) -> GridCell | None:
-    return db.scalar(select(GridCell).where(GridCell.cell_key == cell_key))
+def get_cell_by_key(db: Session, cell_key: str, project_id: UUID) -> GridCell | None:
+    return db.scalar(
+        select(GridCell).where(
+            GridCell.project_id == project_id, GridCell.cell_key == cell_key
+        )
+    )
 
 
-def create_cell(db: Session, data: GridCellCreate) -> GridCell:
+def create_cell(db: Session, data: GridCellCreate, project_id: UUID) -> GridCell:
     key = data.cell_key or _auto_key(data.jtbd, data.journey_stage, data.page_state)
-    if get_cell_by_key(db, key):
-        raise AppError("DUPLICATE_CELL_KEY", f"Cell key '{key}' already exists", 409)
+    if get_cell_by_key(db, key, project_id):
+        raise AppError("DUPLICATE_CELL_KEY", f"本项目已存在格子 '{key}'", 409)
     cell = GridCell(
+        project_id=project_id,
         cell_key=key,
         jtbd=data.jtbd,
         journey_stage=data.journey_stage,

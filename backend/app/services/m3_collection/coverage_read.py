@@ -24,9 +24,13 @@ def _to_dict(snapshot: CoverageSnapshot) -> dict:
     }
 
 
-def get_matrix(db: Session, competitor_ids: list | None = None) -> list[dict]:
-    """Return one row per CoverageSnapshot, optionally filtered by competitor_ids."""
+def get_matrix(
+    db: Session, competitor_ids: list | None = None, project_id: UUID | None = None
+) -> list[dict]:
+    """Return one row per CoverageSnapshot, scoped to project + optional competitors."""
     query = db.query(CoverageSnapshot)
+    if project_id is not None:
+        query = query.filter(CoverageSnapshot.project_id == project_id)
     if competitor_ids:
         query = query.filter(CoverageSnapshot.competitor_id.in_(competitor_ids))
     return [_to_dict(s) for s in query.all()]

@@ -2,6 +2,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
+from app.core.deps import get_project_id
 from app.core.errors import AppError
 from app.services.m3_collection.coverage_read import get_matrix, get_cell_coverage
 from app.services.m3_collection.coverage_recompute import recompute_coverage as _recompute
@@ -15,9 +16,10 @@ router = APIRouter(prefix="/m5", tags=["M5 · Coverage Dashboard"])
 async def get_coverage_matrix(
     competitor_id: list[UUID] | None = Query(default=None),
     db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
 ):
-    """Coverage matrix rows (optionally filtered by competitor_id, repeatable)."""
-    return get_matrix(db, competitor_id)
+    """Coverage matrix rows (scoped to project, optionally filtered by competitor_id)."""
+    return get_matrix(db, competitor_id, project_id)
 
 
 @router.get("/coverage/{cell_id}/{competitor_id}")
@@ -55,9 +57,12 @@ from fastapi.responses import PlainTextResponse  # noqa: E402
 
 
 @router.get("/metrics")
-async def coverage_metrics(db: Session = Depends(get_db)):
+async def coverage_metrics(
+    db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
+):
     """Pipeline health metrics: adoption rate, coverage confidence, status counts."""
-    return get_pipeline_metrics(db)
+    return get_pipeline_metrics(db, project_id)
 
 
 @router.get("/reports")

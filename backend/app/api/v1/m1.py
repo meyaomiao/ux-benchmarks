@@ -2,6 +2,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
+from app.core.deps import get_project_id
 from app.core.errors import AppError
 from app.schemas.m1 import (
     GridCellCreate, GridCellUpdate, GridCellRead,
@@ -22,8 +23,9 @@ async def list_cells_endpoint(
     journey_stage: str | None = None,
     status: str | None = None,
     db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
 ):
-    items, total = list_cells(db, limit, offset, jtbd, journey_stage, status)
+    items, total = list_cells(db, limit, offset, jtbd, journey_stage, status, project_id)
     return GridCellListResponse(
         items=items, total=total, limit=limit, offset=offset,
         has_next=offset + limit < total,
@@ -31,8 +33,12 @@ async def list_cells_endpoint(
 
 
 @router.post("/cells", response_model=GridCellRead, status_code=201)
-async def create_cell_endpoint(data: GridCellCreate, db: Session = Depends(get_db)):
-    return create_cell(db, data)
+async def create_cell_endpoint(
+    data: GridCellCreate,
+    db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
+):
+    return create_cell(db, data, project_id)
 
 
 @router.get("/cells/{cell_id}", response_model=GridCellRead)

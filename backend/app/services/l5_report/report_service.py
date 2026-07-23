@@ -150,11 +150,13 @@ def compose_report(
     audience: str,
     format_type: str,
     title: Optional[str] = None,
+    project_id: Optional[UUID] = None,
 ) -> Report:
-    """主入口：从选定的洞察中重组生成报告。"""
-    insights = list(
-        db.execute(select(Insight).where(Insight.id.in_(insight_ids))).scalars().all()
-    )
+    """主入口：从选定的洞察中重组生成报告（限定在项目内）。"""
+    q = select(Insight).where(Insight.id.in_(insight_ids))
+    if project_id is not None:
+        q = q.where(Insight.project_id == project_id)
+    insights = list(db.execute(q).scalars().all())
     if not insights:
         raise AppError("NOT_FOUND", "没有找到指定洞察", 404)
 
@@ -174,7 +176,10 @@ def compose_report(
             body = _MOCK_BODY.format(count=len(insights))
             generated_by = "mock"
 
+    # project_id from the insights (authoritative), falling back to the arg.
+    resolved_pid = project_id or insights[0].project_id
     report = Report(
+        project_id=resolved_pid,
         title=final_title,
         audience=audience,
         format_type=format_type,
@@ -188,8 +193,11 @@ def compose_report(
     return report
 
 
-def list_reports(db: Session) -> list[Report]:
-    return list(db.execute(select(Report).order_by(Report.created_at.desc())).scalars().all())
+def list_reports(db: Session, project_id: Optional[UUID] = None) -> list[Report]:
+    q = select(Report)
+    if project_id is not None:
+        q = q.where(Report.project_id == project_id)
+    return list(db.execute(q.order_by(Report.created_at.desc())).scalars().all())
 
 
 def get_report(db: Session, report_id: UUID) -> Report | None:

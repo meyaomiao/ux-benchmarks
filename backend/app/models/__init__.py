@@ -6,8 +6,10 @@ from app.models.m4_annotation import Observation, Claim
 from app.models.m5_coverage import CoverageSnapshot
 from app.models.l3_insight import Insight
 from app.models.l5_report import Report
+from app.models.project import Project
 
 __all__ = [
+    "Project",
     "CompetitorEntity",
     "DomainLexicon",
     "GridCell",
@@ -19,4 +21,5 @@ __all__ = [
     "Claim",
     "CoverageSnapshot",
     "Insight",
+    "Report",
 ]

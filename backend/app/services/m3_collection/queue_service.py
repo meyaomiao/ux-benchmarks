@@ -54,18 +54,19 @@ def enqueue_cell(
     return enqueue(db, cell_id, competitor_id, trigger)
 
 
-def list_queued(db: Session, limit: int = 50) -> list[CoverageSnapshot]:
-    """Return QUEUED snapshots, oldest-probed first.
+def list_queued(db: Session, limit: int = 50, project_id: UUID | None = None) -> list[CoverageSnapshot]:
+    """Return QUEUED snapshots, oldest-probed first, scoped to a project.
 
     Actual priority ordering (see priority.py) is computed by the caller/worker
     because PriorityInputs need data assembled from multiple sources. For now we
     order by last_probed_at (nulls first — never-probed cells lead), then
     updated_at as a stable tie-breaker.
     """
+    q = db.query(CoverageSnapshot).filter(CoverageSnapshot.status == CellState.QUEUED)
+    if project_id is not None:
+        q = q.filter(CoverageSnapshot.project_id == project_id)
     return (
-        db.query(CoverageSnapshot)
-        .filter(CoverageSnapshot.status == CellState.QUEUED)
-        .order_by(
+        q.order_by(
             CoverageSnapshot.last_probed_at.asc().nullsfirst(),
             CoverageSnapshot.updated_at.asc(),
         )

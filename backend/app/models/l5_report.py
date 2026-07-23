@@ -12,7 +12,7 @@ reports without regenerating from source observations.
 import uuid
 from typing import Optional
 
-from sqlalchemy import String, Text, text
+from sqlalchemy import ForeignKey, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,6 +25,9 @@ class Report(TimestampMixin, Base):
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True
     )
 
     # Human-readable title, auto-generated if not supplied.

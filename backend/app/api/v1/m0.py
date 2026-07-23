@@ -2,6 +2,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
+from app.core.deps import get_project_id
 from app.schemas.m0 import (
     CompetitorCreate, CompetitorUpdate, CompetitorRead, CompetitorListResponse,
     LexiconEntryCreate, LexiconEntryUpdate, LexiconEntryRead, LexiconListResponse,
@@ -24,8 +25,9 @@ async def list_competitors_endpoint(
     status: str | None = None,
     competitor_type: str | None = None,
     db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
 ):
-    items, total = list_competitors(db, limit, offset, status, competitor_type)
+    items, total = list_competitors(db, limit, offset, status, competitor_type, project_id)
     return CompetitorListResponse(
         items=items, total=total, limit=limit, offset=offset,
         has_next=offset + limit < total,
@@ -33,8 +35,12 @@ async def list_competitors_endpoint(
 
 
 @router.post("/competitors", response_model=CompetitorRead, status_code=201)
-async def create_competitor_endpoint(data: CompetitorCreate, db: Session = Depends(get_db)):
-    return create_competitor(db, data)
+async def create_competitor_endpoint(
+    data: CompetitorCreate,
+    db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
+):
+    return create_competitor(db, data, project_id)
 
 
 @router.get("/competitors/{competitor_id}", response_model=CompetitorRead)
@@ -67,9 +73,11 @@ async def list_lexicon(
     term_type: str | None = Query(default=None),
     language: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
 ):
     items, total = lexicon_service.list_lexicon(
-        db, limit=limit, offset=offset, level=level, term_type=term_type, language=language
+        db, limit=limit, offset=offset, level=level, term_type=term_type,
+        language=language, project_id=project_id,
     )
     return LexiconListResponse(
         items=items, total=total, limit=limit, offset=offset,
@@ -78,8 +86,12 @@ async def list_lexicon(
 
 
 @router.post("/lexicon", response_model=LexiconEntryRead, status_code=201)
-async def create_lexicon_entry(data: LexiconEntryCreate, db: Session = Depends(get_db)):
-    return lexicon_service.create_lexicon_entry(db, data)
+async def create_lexicon_entry(
+    data: LexiconEntryCreate,
+    db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
+):
+    return lexicon_service.create_lexicon_entry(db, data, project_id)
 
 
 @router.get("/lexicon/{entry_id}", response_model=LexiconEntryRead)

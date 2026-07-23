@@ -130,6 +130,7 @@ def accept_asset(
         raise AppError("NOT_FOUND", f"Asset {asset_id} not found", 404)
 
     obs = Observation(
+        project_id=asset.project_id,
         asset_id=asset.id,
         cell_id=asset.cell_id,
         competitor_id=asset.competitor_id,

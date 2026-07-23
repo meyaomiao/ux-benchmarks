@@ -8,10 +8,12 @@ from app.core.errors import AppError
 
 
 def list_mapping_cards(
-    db: Session, limit: int = 20, offset: int = 0
+    db: Session, limit: int = 20, offset: int = 0, project_id: UUID | None = None
 ) -> tuple[list[MappingCard], int]:
-    """List mapping cards with pagination."""
+    """List mapping cards with pagination, scoped to a project."""
     query = select(MappingCard)
+    if project_id is not None:
+        query = query.where(MappingCard.project_id == project_id)
 
     count_query = select(func.count()).select_from(query.subquery())
     total = db.execute(count_query).scalar() or 0
@@ -28,8 +30,8 @@ def get_mapping_card_by_cell(db: Session, cell_id: UUID) -> MappingCard | None:
     return db.execute(query).scalar_one_or_none()
 
 
-def create_mapping_card(db: Session, data: MappingCardCreate) -> MappingCard:
-    """Create a new mapping card for a grid cell."""
+def create_mapping_card(db: Session, data: MappingCardCreate, project_id: UUID) -> MappingCard:
+    """Create a new mapping card for a grid cell (project derived from the cell)."""
     # Verify the referenced grid cell exists
     cell = db.execute(
         select(GridCell).where(GridCell.id == data.cell_id)
@@ -50,7 +52,8 @@ def create_mapping_card(db: Session, data: MappingCardCreate) -> MappingCard:
             409,
         )
 
-    card = MappingCard(**data.model_dump(exclude_none=True))
+    # project_id comes from the cell (authoritative), not the client.
+    card = MappingCard(project_id=cell.project_id, **data.model_dump(exclude_none=True))
     db.add(card)
     db.commit()
     db.refresh(card)

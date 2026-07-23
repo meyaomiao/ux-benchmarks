@@ -2,6 +2,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
+from app.core.deps import get_project_id
 from app.core.errors import AppError
 from app.schemas.m4 import (
     ShortlistItem, ShortlistResponse,
@@ -96,8 +97,9 @@ async def list_insights(
     competitor_id: UUID | None = None,
     is_draft: bool | None = None,
     db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
 ):
-    return insight_service.list_insights(db, cell_id, competitor_id, is_draft)
+    return insight_service.list_insights(db, cell_id, competitor_id, is_draft, project_id)
 
 
 @router.post("/insights/generate", response_model=InsightRead, status_code=201)

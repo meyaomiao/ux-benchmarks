@@ -66,8 +66,11 @@ def list_insights(
     cell_id: Optional[UUID] = None,
     competitor_id: Optional[UUID] = None,
     is_draft: Optional[bool] = None,
+    project_id: Optional[UUID] = None,
 ) -> list[Insight]:
     q = select(Insight)
+    if project_id is not None:
+        q = q.where(Insight.project_id == project_id)
     if cell_id is not None:
         q = q.where(Insight.cell_id == cell_id)
     if competitor_id is not None:
@@ -204,7 +207,13 @@ def _save_insight(
     obs_ids: list[str],
     generated_by: str,
 ) -> Insight:
+    # project_id derived from the cell (authoritative) so insights stay scoped.
+    from app.models.m1_grid import GridCell
+    project_id = db.execute(
+        select(GridCell.project_id).where(GridCell.id == cell_id)
+    ).scalar_one()
     insight = Insight(
+        project_id=project_id,
         cell_id=cell_id,
         competitor_id=competitor_id,
         claim=data.get("claim", ""),

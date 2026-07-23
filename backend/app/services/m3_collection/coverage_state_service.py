@@ -6,8 +6,10 @@ the transition rules defined in state_machine.py.
 from datetime import datetime, timezone
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.m1_grid import GridCell
 from app.models.m5_coverage import CoverageSnapshot
 from app.services.m3_collection.state_machine import (
     CellState,
@@ -19,7 +21,11 @@ from app.services.m3_collection.state_machine import (
 def get_or_create_snapshot(
     db: Session, cell_id: UUID, competitor_id: UUID
 ) -> CoverageSnapshot:
-    """Return the snapshot for the pair, creating an UNPROBED one if missing."""
+    """Return the snapshot for the pair, creating an UNPROBED one if missing.
+
+    project_id is derived from the cell (authoritative), so every coverage row
+    is correctly scoped without callers threading project_id through.
+    """
     snapshot = (
         db.query(CoverageSnapshot)
         .filter(
@@ -29,7 +35,11 @@ def get_or_create_snapshot(
         .one_or_none()
     )
     if snapshot is None:
+        project_id = db.execute(
+            select(GridCell.project_id).where(GridCell.id == cell_id)
+        ).scalar_one()
         snapshot = CoverageSnapshot(
+            project_id=project_id,
             cell_id=cell_id,
             competitor_id=competitor_id,
             status=CellState.UNPROBED,

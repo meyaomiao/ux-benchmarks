@@ -2,6 +2,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
+from app.core.deps import get_project_id
 from app.core.errors import AppError
 from app.schemas.m3 import (
     QueueItemRead, QueueListResponse, PinRequest,
@@ -26,8 +27,9 @@ router = APIRouter(prefix="/m3", tags=["M3 · Collection Engine"])
 async def get_queue_status(
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
 ):
-    items = list_queued(db, limit)
+    items = list_queued(db, limit, project_id)
     return QueueListResponse(items=items, total=len(items))
 
 
@@ -109,17 +111,24 @@ async def manual_screenshot(data: dict, db: Session = Depends(get_db)):
 # --- Batch enqueue (#4) -----------------------------------------------------
 
 @router.post("/queue/enqueue-all")
-async def enqueue_all(db: Session = Depends(get_db)):
-    """Queue every (active cell × confirmed competitor) pair for collection.
+async def enqueue_all(
+    db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
+):
+    """Queue every (active cell × confirmed competitor) pair in this project.
 
     One click instead of pinning pairs one by one. Already-queued/probing
     pairs are no-ops. Returns how many pairs were newly queued.
     """
     cells = list(db.execute(
-        select(GridCell).where(GridCell.status == "active")
+        select(GridCell).where(
+            GridCell.status == "active", GridCell.project_id == project_id
+        )
     ).scalars().all())
     comps = list(db.execute(
-        select(CompetitorEntity).where(CompetitorEntity.status == "confirmed")
+        select(CompetitorEntity).where(
+            CompetitorEntity.status == "confirmed", CompetitorEntity.project_id == project_id
+        )
     ).scalars().all())
 
     queued = 0
