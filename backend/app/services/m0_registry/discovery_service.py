@@ -104,9 +104,9 @@ def _call_claude(category: str, known_products: list[str], tier: str | None = No
 
     # Per-tier spec so a single tier can be generated in isolation (parallel).
     _TIER_SPEC = {
-        "direct": ("direct（直接竞品）", "直接竞品", "同品类、同目标用户，列出 8 个，覆盖头部、新锐、垂直细分玩家，含中国本土产品"),
-        "indirect": ("indirect（间接竞品）", "间接竞品", "不同品类但有重叠 jobs-to-be-done，列出 5 个"),
-        "cross_industry": ("cross_industry（跨行业标杆）", "跨行业标杆", "不同行业但在相关交互场景领先，列出 5 个"),
+        "direct": ("direct（直接竞品）", "直接竞品", "同品类、同目标用户，尽可能全面地列出 10~15 个，覆盖头部、新锐、垂直细分玩家，含中国本土产品，宁多勿漏——用户会自己筛选"),
+        "indirect": ("indirect（间接竞品）", "间接竞品", "不同品类但有重叠 jobs-to-be-done，列出 6~8 个"),
+        "cross_industry": ("cross_industry（跨行业标杆）", "跨行业标杆", "不同行业但在相关交互场景领先，列出 6~8 个"),
     }
 
     if tier:
@@ -117,12 +117,12 @@ def _call_claude(category: str, known_products: list[str], tier: str | None = No
             f"只推荐一类值得研究的 UX 设计标杆（不包括已知竞品）：{code}——{spec}\n\n"
             "要求：\n"
             "- 每个产品名唯一，不要重复\n"
-            "- rationale 一句话（40 字以内）说清该产品在 UX 上最值得研究的点\n"
+            "- rationale 说清该产品在 UX 上最值得研究的点（可稍详细）\n"
             f'返回 JSON 数组，每项：{{"name":"...","tier":"{tier}","tier_label":"{label}",'
             '"rationale":"...","official_domain":"...或null","help_center_domain":"...或null"}\n'
             "只返回 JSON 数组，无其他文字。"
         )
-        max_tokens = 2000
+        max_tokens = 4000
     else:
         prompt = (
             f"产品品类：{category}\n"
