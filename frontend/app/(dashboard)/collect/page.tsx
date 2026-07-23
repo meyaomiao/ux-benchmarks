@@ -368,18 +368,20 @@ export default function CollectPage() {
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
           <h2 className="text-sm font-semibold text-gray-700">
             采集队列
-            {queue.length > 0 && (
-              <span className="ml-2 text-xs text-gray-400 font-normal">{queue.length} 条</span>
+            {nQueued > 0 && (
+              <span className="ml-2 text-xs text-gray-400 font-normal">
+                {nQueued} 条待采{queue.length < nQueued ? `（列表显示前 ${queue.length}）` : ""}
+              </span>
             )}
           </h2>
           <div className="flex items-center gap-3">
-            {queue.length > 0 && (
+            {nQueued > 0 && (
               <button
                 onClick={handleDispatch}
                 disabled={dispatching}
                 className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors font-medium"
               >
-                {dispatching ? "派发中…" : `▶ 后台批量采集（${queue.length}）`}
+                {dispatching ? "派发中…" : `▶ 后台批量采集（${nQueued}）`}
               </button>
             )}
             <button

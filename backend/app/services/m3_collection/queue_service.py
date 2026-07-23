@@ -75,6 +75,18 @@ def list_queued(db: Session, limit: int = 50, project_id: UUID | None = None) ->
     )
 
 
+def count_queued(db: Session, project_id: UUID | None = None) -> int:
+    """Total QUEUED count for a project — the TRUE number of pairs to collect,
+    independent of the list_queued page limit (so the UI can show the real total)."""
+    from sqlalchemy import func, select
+    q = select(func.count()).select_from(CoverageSnapshot).where(
+        CoverageSnapshot.status == CellState.QUEUED
+    )
+    if project_id is not None:
+        q = q.where(CoverageSnapshot.project_id == project_id)
+    return db.scalar(q) or 0
+
+
 def dequeue_next(db: Session) -> CoverageSnapshot | None:
     """Pull the oldest QUEUED snapshot, transition it to PROBING, return it.
 

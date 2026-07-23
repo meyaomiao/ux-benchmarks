@@ -8,7 +8,7 @@ from app.schemas.m3 import (
     QueueItemRead, QueueListResponse, PinRequest,
     QueryBundle, SourceRegistryListResponse,
 )
-from app.services.m3_collection.queue_service import enqueue_cell, list_queued
+from app.services.m3_collection.queue_service import enqueue_cell, list_queued, count_queued
 from app.services.m3_collection.query_expansion import build_query_bundle
 from app.services.m3_collection import source_registry_service
 from app.services.m3_collection.state_machine import Trigger
@@ -30,7 +30,8 @@ async def get_queue_status(
     project_id: UUID = Depends(get_project_id),
 ):
     items = list_queued(db, limit, project_id)
-    return QueueListResponse(items=items, total=len(items))
+    # total = TRUE queued count (not len(items), which is capped by `limit`).
+    return QueueListResponse(items=items, total=count_queued(db, project_id))
 
 
 @router.post("/queue/pin", response_model=QueueItemRead, status_code=201)
