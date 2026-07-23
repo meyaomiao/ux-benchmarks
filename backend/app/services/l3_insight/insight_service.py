@@ -143,6 +143,16 @@ def generate_insight(db: Session, cell_id: UUID, competitor_id: UUID) -> Insight
         mock["claim"] = mock["claim"].replace("Linear", comp_name)
         return _save_insight(db, cell_id, competitor_id, mock, [], generated_by="mock")
 
+    # Evidence gate (#6): in real mode, refuse to fabricate an insight when no
+    # evidence has been accepted for this (cell, competitor). An insight with no
+    # source observations is meaningless — the user must review evidence first.
+    if not obs_rows:
+        raise AppError(
+            "NO_EVIDENCE",
+            "该场景×竞品还没有已审核通过的证据，无法生成洞察。请先在采集/审核环节接受证据。",
+            409,
+        )
+
     try:
         content = _call_claude(intent, comp_name, obs_texts)
         obs_ids = [str(obs.id) for obs in obs_rows]

@@ -24,6 +24,12 @@ export default function CollectPage() {
   const [ssErr, setSsErr] = useState("");
   const [ssResult, setSsResult] = useState<{ source_url: string; ai_score: number | null } | null>(null);
 
+  // Batch enqueue (#4) + synchronous probe (#5) state
+  const [enqueuing, setEnqueuing] = useState(false);
+  const [enqueueMsg, setEnqueueMsg] = useState("");
+  const [probing, setProbing] = useState<string | null>(null); // "cellId|compId" being probed
+  const [probeResults, setProbeResults] = useState<Record<string, string>>({});
+
   const [metrics, setMetrics] = useState<Record<string, unknown> | null>(null);
 
   const loadQueue = () =>
@@ -74,6 +80,39 @@ export default function CollectPage() {
     } catch (e) {
       setSsErr(e instanceof Error ? e.message : "截图失败");
       setSsStatus("err");
+    }
+  }
+
+  // #4 Queue every (active cell × confirmed competitor) pair in one click.
+  async function handleEnqueueAll() {
+    setEnqueuing(true);
+    setEnqueueMsg("");
+    try {
+      const r = await api.enqueueAll();
+      setEnqueueMsg(`已入队 ${r.newly_queued} 对（共 ${r.pairs_total} 个格子×竞品组合）`);
+      await loadQueue();
+    } catch (e) {
+      setEnqueueMsg(e instanceof Error ? e.message : "批量入队失败");
+    } finally {
+      setEnqueuing(false);
+    }
+  }
+
+  // #5 Run one probe synchronously so the user sees collection progress now.
+  async function handleProbeNow(cellId: string, compId: string) {
+    const key = `${cellId}|${compId}`;
+    setProbing(key);
+    try {
+      const r = await api.probeNow(cellId, compId);
+      setProbeResults((prev) => ({
+        ...prev,
+        [key]: `找到 ${r.candidates_found} · 通过 ${r.passed} · ${r.state}`,
+      }));
+      await loadQueue();
+    } catch (e) {
+      setProbeResults((prev) => ({ ...prev, [key]: e instanceof Error ? e.message : "采集失败" }));
+    } finally {
+      setProbing(null);
     }
   }
 
@@ -146,7 +185,19 @@ export default function CollectPage() {
       </div>
 
       <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6">
-        <h2 className="text-sm font-semibold text-gray-700 mb-3">手动触发采集</h2>
+        <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+          <h2 className="text-sm font-semibold text-gray-700">手动触发采集</h2>
+          <div className="flex items-center gap-2">
+            {enqueueMsg && <span className="text-xs text-gray-500">{enqueueMsg}</span>}
+            <button
+              onClick={handleEnqueueAll}
+              disabled={enqueuing || loading}
+              className="text-xs px-3 py-1.5 rounded-lg bg-gray-800 text-white hover:bg-gray-900 disabled:opacity-50 transition-colors font-medium"
+            >
+              {enqueuing ? "入队中…" : "⚡ 全部格子×竞品加入队列"}
+            </button>
+          </div>
+        </div>
         {loading ? (
           <div className="text-sm text-gray-400">加载中…</div>
         ) : (
@@ -297,12 +348,16 @@ export default function CollectPage() {
                 <th className="px-4 py-3 font-medium">状态</th>
                 <th className="px-4 py-3 font-medium">探测次数</th>
                 <th className="px-4 py-3 font-medium">上次探测</th>
+                <th className="px-4 py-3 font-medium text-right">操作</th>
               </tr>
             </thead>
             <tbody>
               {queue.map((item) => {
                 const cell = cellMap[item.cell_id];
                 const comp = compMap[item.competitor_id];
+                const key = `${item.cell_id}|${item.competitor_id}`;
+                const result = probeResults[key];
+                const isProbing = probing === key;
                 return (
                   <tr key={item.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
                     <td className="px-5 py-3 text-gray-700">
@@ -323,6 +378,19 @@ export default function CollectPage() {
                       {item.last_probed_at
                         ? new Date(item.last_probed_at).toLocaleString("zh-CN")
                         : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      {result ? (
+                        <span className="text-[11px] text-green-600">{result}</span>
+                      ) : (
+                        <button
+                          onClick={() => handleProbeNow(item.cell_id, item.competitor_id)}
+                          disabled={isProbing}
+                          className="text-xs px-2.5 py-1 rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                        >
+                          {isProbing ? "采集中…" : "立即采集"}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );

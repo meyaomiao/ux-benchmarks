@@ -258,6 +258,36 @@ export const api = {
     return res.json();
   },
 
+  // M3 · Batch enqueue all (active cell × confirmed competitor) pairs (#4)
+  enqueueAll: async (): Promise<{
+    cells: number; competitors: number; pairs_total: number; newly_queued: number;
+  }> => {
+    if (USE_MOCK) {
+      await new Promise(r => setTimeout(r, 400));
+      return { cells: 7, competitors: 2, pairs_total: 14, newly_queued: 14 };
+    }
+    const res = await fetch(`${BASE}/m3/queue/enqueue-all`, { method: "POST" });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
+  // M3 · Run one probe synchronously, return result immediately (#5)
+  probeNow: async (cellId: string, competitorId: string): Promise<{
+    state: string; candidates_found: number; passed: number; persisted: number;
+  }> => {
+    if (USE_MOCK) {
+      await new Promise(r => setTimeout(r, 1500));
+      return { state: "SHORTLIST_READY", candidates_found: 5, passed: 3, persisted: 3 };
+    }
+    const res = await fetch(`${BASE}/m3/probe-now`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cell_id: cellId, competitor_id: competitorId }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
   // M5 · Metrics + reports (#29 #30)
   getCoverageMetrics: () =>
     get<Record<string, unknown>>("/m5/metrics", {
@@ -289,6 +319,18 @@ export const api = {
     if (res.status === 404) return null;
     if (!res.ok) throw new Error(`getMappingCard failed: ${res.status}`);
     return res.json();
+  },
+
+  // M2 · List all mapping cards (used to show real per-cell readiness on the grid)
+  listMappingCards: async (): Promise<MappingCard[]> => {
+    if (USE_MOCK) {
+      await new Promise((r) => setTimeout(r, 120));
+      return Object.values(mockMappingCards);
+    }
+    const res = await fetch(`${BASE}/m2/mapping-cards?limit=200`);
+    if (!res.ok) throw new Error(`listMappingCards failed: ${res.status}`);
+    const data = await res.json();
+    return data.items ?? [];
   },
 
   // M2 · AI-draft a mapping card from the cell's coordinates (#35)

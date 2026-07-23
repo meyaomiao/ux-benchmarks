@@ -12,6 +12,10 @@ from app.services.m3_collection.query_expansion import build_query_bundle
 from app.services.m3_collection import source_registry_service
 from app.services.m3_collection.state_machine import Trigger
 from app.services.m3_collection.screenshot_service import capture_url
+from app.services.m3_collection.probe_runner import run_probe
+from app.models.m1_grid import GridCell
+from app.models.m0_registry import CompetitorEntity
+from sqlalchemy import select
 
 router = APIRouter(prefix="/m3", tags=["M3 · Collection Engine"])
 
@@ -100,3 +104,53 @@ async def manual_screenshot(data: dict, db: Session = Depends(get_db)):
         "cell_id": str(asset.cell_id),
         "competitor_id": str(asset.competitor_id),
     }
+
+
+# --- Batch enqueue (#4) -----------------------------------------------------
+
+@router.post("/queue/enqueue-all")
+async def enqueue_all(db: Session = Depends(get_db)):
+    """Queue every (active cell × confirmed competitor) pair for collection.
+
+    One click instead of pinning pairs one by one. Already-queued/probing
+    pairs are no-ops. Returns how many pairs were newly queued.
+    """
+    cells = list(db.execute(
+        select(GridCell).where(GridCell.status == "active")
+    ).scalars().all())
+    comps = list(db.execute(
+        select(CompetitorEntity).where(CompetitorEntity.status == "confirmed")
+    ).scalars().all())
+
+    queued = 0
+    for cell in cells:
+        for comp in comps:
+            snap = enqueue_cell(db, cell.id, comp.id, Trigger.COVERAGE_GAP)
+            if snap.status == "QUEUED":
+                queued += 1
+    return {
+        "cells": len(cells),
+        "competitors": len(comps),
+        "pairs_total": len(cells) * len(comps),
+        "newly_queued": queued,
+    }
+
+
+# --- Synchronous probe (#5) -------------------------------------------------
+
+@router.post("/probe-now")
+async def probe_now(data: dict, db: Session = Depends(get_db)):
+    """Run one probe cycle synchronously and return the result immediately.
+
+    Body: {"cell_id": "uuid", "competitor_id": "uuid"}
+    Lets the UI show collection progress even when no Celery worker is running.
+    """
+    try:
+        cell_id = UUID(str(data.get("cell_id", "")))
+        competitor_id = UUID(str(data.get("competitor_id", "")))
+    except (ValueError, AttributeError):
+        raise AppError("BAD_REQUEST", "cell_id and competitor_id must be valid UUIDs", 400)
+    try:
+        return run_probe(db, cell_id, competitor_id)
+    except Exception as exc:
+        raise AppError("PROBE_FAILED", f"采集失败：{exc}", 500)

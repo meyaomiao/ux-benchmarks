@@ -54,11 +54,17 @@ def _prompt(req: GridGenerationRequest) -> str:
         )
     else:
         # Category-only mode: force grounding on real products to avoid
-        # generic / hallucinated JTBDs.
+        # generic / hallucinated JTBDs. Make the model name concrete products
+        # FIRST and derive JTBDs strictly from their real flows.
         grounding = (
-            "只给了品类、没有具体产品。请先在心里想出该品类最具代表性的 3-5 个"
-            "真实产品，基于它们的共性核心流程来提炼 JTBD——不要凭空臆测或罗列"
-            "边缘任务。只输出你高度确信是该品类核心的 JTBD，宁缺毋滥。"
+            "只给了品类、没有具体产品。请严格按以下步骤，不要跳过：\n"
+            "第一步：明确列出该品类里你最熟悉的 3-5 个真实主流产品（用真名）。\n"
+            "第二步：只基于这些真实产品实际都有的核心流程来提炼 JTBD——每个 JTBD "
+            "都必须能对应到上面某个真实产品里确实存在的功能，不能凭空臆测、"
+            "不能是行业套话（如'提升效率''优化体验'），不能罗列边缘任务。\n"
+            "第三步：只保留你高度确信是该品类核心、且主流产品体验各有高下的 JTBD，"
+            "宁缺毋滥。\n"
+            "把第一步想到的产品名一并放进返回 JSON 的 grounded_products 字段。"
         )
 
     return f"""分析产品品类：{req.category}

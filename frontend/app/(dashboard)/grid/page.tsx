@@ -1,17 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import type { GridCell, Competitor } from "@/lib/types";
 import { MappingCardEditor } from "@/components/grid/mapping-card-editor";
 import CellWizard from "@/components/grid/cell-wizard";
-import { mockMappingCards } from "@/lib/mock";
-
-// Coverage state is M5's job; here we just show a placeholder legend so the
-// matrix structure (cell × competitor) is visible. Real state comes later.
-const PLACEHOLDER = "c-empty";
 
 export default function GridPage() {
   const searchParams = useSearchParams();
@@ -24,12 +19,22 @@ export default function GridPage() {
   const [wizardCategory, setWizardCategory] = useState("");
   const [quickAdd, setQuickAdd] = useState({ jtbd: "", journey_stage: "", page_state: "" });
   const [quickAddLoading, setQuickAddLoading] = useState(false);
+  // Real per-cell mapping-card readiness (cell_ids that have a card), from DB.
+  const [cardCellIds, setCardCellIds] = useState<Set<string>>(new Set());
+  const [batchGen, setBatchGen] = useState<{ running: boolean; done: number; total: number } | null>(null);
+
+  const loadCards = useCallback(() => {
+    return api.listMappingCards().then((cards) => {
+      setCardCellIds(new Set(cards.map((c) => c.cell_id)));
+    });
+  }, []);
 
   useEffect(() => {
-    Promise.all([api.listCells(), api.listCompetitors()])
-      .then(([g, c]) => {
+    Promise.all([api.listCells(), api.listCompetitors(), api.listMappingCards()])
+      .then(([g, c, cards]) => {
         setCells(g.items);
         setCompetitors(c.items.filter((x) => x.status === "confirmed"));
+        setCardCellIds(new Set(cards.map((mc) => mc.cell_id)));
       })
       .finally(() => setLoading(false));
   }, []);
@@ -58,6 +63,31 @@ export default function GridPage() {
     } finally {
       setQuickAddLoading(false);
     }
+  }
+
+  // #2 Batch AI-generate mapping cards for every cell that doesn't have one yet.
+  // Runs sequentially (each call hits Claude) with a live progress counter.
+  async function handleBatchGenerateCards() {
+    const targets = cells.filter((c) => !cardCellIds.has(c.id));
+    if (targets.length === 0) return;
+    setBatchGen({ running: true, done: 0, total: targets.length });
+    for (let i = 0; i < targets.length; i++) {
+      const cell = targets[i];
+      try {
+        const draft = await api.generateMappingCard(cell.id);
+        await api.saveMappingCard(cell.id, {
+          intent_definition: draft.intent_definition,
+          inclusion_criteria: draft.inclusion_criteria || null,
+          exclusion_criteria: draft.exclusion_criteria || null,
+        });
+        setCardCellIds((prev) => new Set([...prev, cell.id]));
+      } catch {
+        // one failure shouldn't abort the batch; leave that cell as 待填写
+      }
+      setBatchGen({ running: true, done: i + 1, total: targets.length });
+    }
+    await loadCards();
+    setBatchGen(null);
   }
 
   return (
@@ -96,6 +126,31 @@ export default function GridPage() {
         <div className="p-8 text-center text-gray-400 text-sm">加载中…</div>
       ) : (
         <>
+          {/* Mapping-card batch toolbar */}
+          {cells.length > 0 && (() => {
+            const missing = cells.filter((c) => !cardCellIds.has(c.id)).length;
+            const ready = cells.length - missing;
+            return (
+              <div className="mb-3 flex items-center justify-between gap-3 flex-wrap">
+                <span className="text-xs text-gray-500">
+                  映射卡：<span className="text-green-600 font-medium">{ready} 已就绪</span>
+                  {missing > 0 && <span className="text-amber-600 font-medium"> · {missing} 待填写</span>}
+                </span>
+                {missing > 0 && (
+                  <button
+                    onClick={handleBatchGenerateCards}
+                    disabled={!!batchGen?.running}
+                    className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors font-medium"
+                  >
+                    {batchGen?.running
+                      ? `AI 生成中… ${batchGen.done}/${batchGen.total}`
+                      : `✨ 批量生成 ${missing} 张映射卡`}
+                  </button>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Coordinate list */}
           <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mb-8">
             <table className="w-full text-sm">
@@ -112,7 +167,7 @@ export default function GridPage() {
               </thead>
               <tbody>
                 {cells.map((c) => {
-                  const hasCard = !!mockMappingCards[c.id];
+                  const hasCard = cardCellIds.has(c.id);
                   return (
                   <tr key={c.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
                     <td className="px-4 py-3">{c.jtbd}</td>
@@ -257,7 +312,7 @@ export default function GridPage() {
         <MappingCardEditor
           cellId={editorCell.id}
           cellLabel={`${editorCell.journey_stage} · ${editorCell.page_state}`}
-          onClose={() => setEditorCell(null)}
+          onClose={() => { setEditorCell(null); loadCards(); }}
         />
       )}
 
@@ -265,6 +320,7 @@ export default function GridPage() {
       {showWizard && (
         <CellWizard
           initialCategory={wizardCategory}
+          initialCompetitors={competitors.map((c) => c.canonical_name)}
           onDone={(newCells: GridCell[]) => {
             setCells((prev) => [...prev, ...newCells]);
             setShowWizard(false);

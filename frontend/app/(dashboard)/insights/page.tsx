@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
-import type { GridCell, Competitor, Insight } from "@/lib/types";
+import type { GridCell, Competitor, Insight, CoverageRow } from "@/lib/types";
 
 //---- helpers ---------------------------------------------------------------
 
@@ -230,7 +230,9 @@ export default function InsightsPage() {
   const [cells, setCells] = useState<GridCell[]>([]);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [insights, setInsights] = useState<Insight[]>([]);
+  const [coverage, setCoverage] = useState<CoverageRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [batchGen, setBatchGen] = useState<{ running: boolean; done: number; total: number } | null>(null);
 
   // Generate form state
   const [genCellId, setGenCellId] = useState<string>("");
@@ -243,12 +245,13 @@ export default function InsightsPage() {
     // preselects the generate form so the user can generate immediately.
     const paramCell = searchParams.get("cell_id");
     const paramComp = searchParams.get("competitor_id");
-    Promise.all([api.listCells(), api.listCompetitors(), api.listInsights()])
-      .then(([g, c, ins]) => {
+    Promise.all([api.listCells(), api.listCompetitors(), api.listInsights(), api.getCoverage()])
+      .then(([g, c, ins, cov]) => {
         setCells(g.items);
         const confirmed = c.items.filter((x) => x.status === "confirmed");
         setCompetitors(confirmed);
         setInsights(ins);
+        setCoverage(cov);
         const cellExists = g.items.some((x) => x.id === paramCell);
         const compExists = confirmed.some((x) => x.id === paramComp);
         if (paramCell && cellExists) setGenCellId(paramCell);
@@ -292,6 +295,32 @@ export default function InsightsPage() {
     }
   }
 
+  // #6 One-click: generate insights for every SATURATED (evidence-accepted)
+  // cell×competitor pair that doesn't have an insight yet. Gated on real
+  // accepted evidence — no more meaningless insights before evidence exists.
+  const saturatedPairs = coverage.filter((r) => r.status === "SATURATED");
+  const existingPairs = new Set(insights.map((i) => `${i.cell_id}|${i.competitor_id}`));
+  const pendingPairs = saturatedPairs.filter(
+    (r) => !existingPairs.has(`${r.cell_id}|${r.competitor_id}`)
+  );
+
+  async function handleGenerateAll() {
+    if (pendingPairs.length === 0) return;
+    setBatchGen({ running: true, done: 0, total: pendingPairs.length });
+    setGenError(null);
+    for (let i = 0; i < pendingPairs.length; i++) {
+      const r = pendingPairs[i];
+      try {
+        const insight = await api.generateInsight(r.cell_id, r.competitor_id);
+        setInsights((prev) => [insight, ...prev]);
+      } catch (e) {
+        // keep going; a single failure shouldn't abort the batch
+      }
+      setBatchGen({ running: true, done: i + 1, total: pendingPairs.length });
+    }
+    setBatchGen(null);
+  }
+
   const handleSave = useCallback((updated: Insight) => {
     setInsights((prev) => prev.map((i) => (i.id === updated.id ? updated : i)));
   }, []);
@@ -326,7 +355,21 @@ export default function InsightsPage() {
 
       {/* Generate section */}
       <div className="bg-white border border-gray-200 rounded-xl p-5 mb-8 max-w-2xl">
-        <div className="text-sm font-semibold text-gray-700 mb-4">生成新洞察</div>
+        <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+          <div className="text-sm font-semibold text-gray-700">生成新洞察</div>
+          {pendingPairs.length > 0 && (
+            <button
+              onClick={handleGenerateAll}
+              disabled={!!batchGen?.running}
+              className="text-xs px-3 py-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors font-medium"
+              title="为所有已审核通过证据的格子×竞品一键生成洞察"
+            >
+              {batchGen?.running
+                ? `AI 生成中… ${batchGen.done}/${batchGen.total}`
+                : `⚡ 一键生成 ${pendingPairs.length} 条（已审核证据）`}
+            </button>
+          )}
+        </div>
         <div className="flex items-end gap-3 flex-wrap">
           <label className="flex-1 min-w-[160px]">
             <span className="block text-xs text-gray-500 mb-1">场景格子</span>

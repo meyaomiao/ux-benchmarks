@@ -140,7 +140,6 @@ export default function ReportsPage() {
   const [format, setFormat] = useState<ReportFormat>("review_15min");
   const [composing, setComposing] = useState(false);
   const [composeError, setComposeError] = useState<string | null>(null);
-  const [autoGenStatus, setAutoGenStatus] = useState<string | null>(null);
 
   // Viewer state
   const [viewing, setViewing] = useState<Report | null>(null);
@@ -189,52 +188,6 @@ export default function ReportsPage() {
     } catch (e) {
       setComposeError(e instanceof Error ? e.message : "生成失败");
     } finally {
-      setComposing(false);
-    }
-  }
-
-  /** 一键流：为所有竞品×场景生成缺失洞察，然后全选并重组报告 */
-  async function handleAutoGenerateAndCompose() {
-    setComposing(true);
-    setComposeError(null);
-    setAutoGenStatus("正在获取场景和竞品…");
-    try {
-      const [cellsRes, compsRes] = await Promise.all([
-        api.listCells(),
-        api.listCompetitors(),
-      ]);
-      const cells = cellsRes.items;
-      const comps = compsRes.items.filter(c => c.status === "confirmed");
-
-      const existingPairs = new Set(
-        insights.map(i => `${i.cell_id}:${i.competitor_id}`)
-      );
-      const missing: { cellId: string; compId: string }[] = [];
-      for (const cell of cells) {
-        for (const comp of comps) {
-          if (!existingPairs.has(`${cell.id}:${comp.id}`)) {
-            missing.push({ cellId: cell.id, compId: comp.id });
-          }
-        }
-      }
-
-      const allInsights = [...insights];
-      let done = 0;
-      for (const pair of missing) {
-        setAutoGenStatus(`生成洞察中… ${++done}/${missing.length}`);
-        const ins = await api.generateInsight(pair.cellId, pair.compId);
-        allInsights.push(ins);
-        setInsights([...allInsights]);
-      }
-
-      setAutoGenStatus("重组报告中…");
-      const allIds = allInsights.map(i => i.id);
-      setSelected(new Set(allIds));
-      await handleCompose(allIds);
-    } catch (e) {
-      setComposeError(e instanceof Error ? e.message : "自动生成失败");
-    } finally {
-      setAutoGenStatus(null);
       setComposing(false);
     }
   }
@@ -295,26 +248,21 @@ export default function ReportsPage() {
             </div>
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <span className="text-xs text-gray-400">
-                {autoGenStatus ?? `已选 ${selected.size} / ${insights.length} 条洞察`}
+                已选 {selected.size} / {insights.length} 条洞察
               </span>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleAutoGenerateAndCompose}
-                  disabled={composing}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
-                  title="为所有竞品×场景自动生成缺失洞察，然后一键重组成报告"
-                >
-                  {composing && autoGenStatus ? autoGenStatus : "⚡ 一键生成全部并重组"}
-                </button>
-                <button
-                  onClick={() => handleCompose()}
-                  disabled={selected.size === 0 || composing}
-                  className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-                >
-                  {composing && !autoGenStatus ? "AI 重组中…" : "生成报告"}
-                </button>
-              </div>
+              <button
+                onClick={() => handleCompose()}
+                disabled={selected.size === 0 || composing}
+                className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+              >
+                {composing ? "AI 重组中…" : "生成报告"}
+              </button>
             </div>
+            {insights.length === 0 && (
+              <p className="mt-2 text-xs text-amber-600">
+                还没有洞察。请先到「洞察库」基于已审核证据生成洞察，再回来重组报告。
+              </p>
+            )}
             {composeError && <p className="mt-2 text-xs text-red-500">{composeError}</p>}
           </div>
 

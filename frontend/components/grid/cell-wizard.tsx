@@ -11,14 +11,17 @@ interface Props {
   onDone: (newCells: GridCell[]) => void;
   onClose: () => void;
   initialCategory?: string;
+  initialCompetitors?: string[];
 }
 
-export default function CellWizard({ onDone, onClose, initialCategory = "" }: Props) {
+export default function CellWizard({ onDone, onClose, initialCategory = "", initialCompetitors = [] }: Props) {
   /* ── Phase A state ─────────────────────────────────────────── */
   const [phase, setPhase] = useState<Phase>("input");
   const [category, setCategory] = useState(initialCategory);
   const [competitorInput, setCompetitorInput] = useState("");
-  const [knownProducts, setKnownProducts] = useState<string[]>([]);
+  // Prefill with already-registered competitors — the user just discovered them,
+  // and grounding on real products dramatically improves JTBD relevance (#1).
+  const [knownProducts, setKnownProducts] = useState<string[]>(initialCompetitors);
   const [generating, setGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
 
@@ -193,8 +196,11 @@ function PhaseInput({
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">
           已知竞品
-          <span className="text-gray-400 font-normal ml-1">（可选，帮助 AI 聚焦，按 Enter 添加）</span>
+          <span className="text-gray-400 font-normal ml-1">（强烈建议填写，AI 会据此提炼更准的 JTBD，按 Enter 添加）</span>
         </label>
+        {knownProducts.length > 0 && (
+          <p className="text-[11px] text-indigo-500 mb-1.5">已自动带入注册过的竞品，可增删</p>
+        )}
         <div className="flex gap-2 flex-wrap mb-2">
           {knownProducts.map((p) => (
             <span key={p} className="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-full text-xs font-medium">
