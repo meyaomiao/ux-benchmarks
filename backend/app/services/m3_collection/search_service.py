@@ -116,6 +116,30 @@ def _brave_search(query: str, n: int) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Serper.dev (recommended — Google results, cheapest; requires SEARCH_API_KEY)
+# ---------------------------------------------------------------------------
+
+def _serper_search(query: str, n: int) -> list[str]:
+    """Call Serper.dev (Google Search API) -- requires SEARCH_API_KEY.
+
+    Best coverage for niche B2B help docs (Google index) at ~1/10th SerpAPI's
+    price. Raises on HTTP or parse error.
+    """
+    import httpx  # lazy import
+
+    resp = httpx.post(
+        "https://google.serper.dev/search",
+        headers={"X-API-KEY": settings.search_api_key, "Content-Type": "application/json"},
+        json={"q": query, "num": n},
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    results = data.get("organic", [])
+    return [r["link"] for r in results if r.get("link")][:n]
+
+
+# ---------------------------------------------------------------------------
 # SerpAPI (optional, requires SEARCH_API_KEY)
 # ---------------------------------------------------------------------------
 
@@ -145,9 +169,9 @@ def search_urls(query: str, n: int = _RESULTS_PER_QUERY) -> list[str]:
     """Return up to `n` real result URLs for `query`.
 
     Provider selection order:
-      1. Mock URLs    -- ONLY when use_collection_mock=True (offline/dev fixtures)
-      2. Brave/SerpAPI-- when SEARCH_API_KEY is set in .env
-      3. DuckDuckGo   -- default, zero config, no key needed
+      1. Mock URLs         -- ONLY when use_collection_mock=True (offline fixtures)
+      2. serper/serpapi/brave -- when SEARCH_API_KEY set (SEARCH_API_PROVIDER picks)
+      3. DuckDuckGo        -- default, zero config, no key needed
 
     In real mode (use_collection_mock=False), a search failure returns [] —
     we do NOT fabricate mock URLs, because those point to nonexistent domains
@@ -160,7 +184,10 @@ def search_urls(query: str, n: int = _RESULTS_PER_QUERY) -> list[str]:
     # Premium provider if explicitly configured.
     if settings.search_api_key:
         try:
-            if settings.search_api_provider == "serpapi":
+            provider = settings.search_api_provider
+            if provider == "serper":
+                return _serper_search(query, n)
+            if provider == "serpapi":
                 return _serpapi_search(query, n)
             return _brave_search(query, n)
         except Exception as exc:  # noqa: BLE001
