@@ -333,6 +333,17 @@ export const api = {
     return res.json();
   },
 
+  // M3 · Dispatch all QUEUED pairs to Celery workers (background, async) (#51)
+  dispatchQueued: async (): Promise<{ dispatched: number }> => {
+    if (USE_MOCK) {
+      await new Promise(r => setTimeout(r, 300));
+      return { dispatched: 14 };
+    }
+    const res = await pfetch(`${BASE}/m3/dispatch-queued`, { method: "POST" });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
   // M3 · Run one probe synchronously, return result immediately (#5)
   probeNow: async (cellId: string, competitorId: string): Promise<{
     state: string; candidates_found: number; passed: number; persisted: number;
@@ -595,6 +606,7 @@ export interface GeneratedCell {
   jtbd: string;
   journey_stage: string;
   page_state: string;
+  scenario_detail?: string;
   value_score: number;
 }
 export interface GridGenerationResult {

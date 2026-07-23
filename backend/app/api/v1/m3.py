@@ -145,6 +145,39 @@ async def enqueue_all(
     }
 
 
+# --- Async batch dispatch (#51) --------------------------------------------
+
+@router.post("/dispatch-queued")
+async def dispatch_queued(
+    db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
+):
+    """Dispatch every QUEUED pair in this project to Celery workers (background).
+
+    Returns immediately with how many were dispatched. The workers run each
+    probe server-side and write results to the DB, so progress survives page
+    navigation / tab close — the frontend just polls /m5/metrics for counts.
+    """
+    from app.models.m5_coverage import CoverageSnapshot
+    from app.workers.tasks.probe_cycle import run_probe_cycle
+
+    rows = list(db.execute(
+        select(CoverageSnapshot).where(
+            CoverageSnapshot.project_id == project_id,
+            CoverageSnapshot.status == "QUEUED",
+        )
+    ).scalars().all())
+
+    dispatched = 0
+    for r in rows:
+        try:
+            run_probe_cycle.delay(str(r.cell_id), str(r.competitor_id))
+            dispatched += 1
+        except Exception as exc:  # noqa: BLE001 — broker down etc.
+            raise AppError("DISPATCH_FAILED", f"派发失败（worker/broker 不可用？）：{exc}", 503)
+    return {"dispatched": dispatched}
+
+
 # --- Synchronous probe (#5) -------------------------------------------------
 
 @router.post("/probe-now")

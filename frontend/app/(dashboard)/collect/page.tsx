@@ -29,14 +29,24 @@ export default function CollectPage() {
   const [enqueueMsg, setEnqueueMsg] = useState("");
   const [probing, setProbing] = useState<string | null>(null); // "cellId|compId" being probed
   const [probeResults, setProbeResults] = useState<Record<string, string>>({});
-  // Batch collection (#50): iterate the queue, one probe at a time, live progress.
-  const [batch, setBatch] = useState<{ running: boolean; done: number; total: number }>({ running: false, done: 0, total: 0 });
-  const batchStop = useRef(false);
+  // Async batch (#51): dispatch to Celery, progress read from DB via /m5/metrics.
+  const [dispatching, setDispatching] = useState(false);
+  const [dispatchMsg, setDispatchMsg] = useState("");
 
   const [metrics, setMetrics] = useState<Record<string, unknown> | null>(null);
 
   const loadQueue = () =>
     api.getQueueStatus().then((items) => setQueue(items));
+
+  // Live status counts from DB-backed metrics (survive navigation / tab close).
+  const cov = (metrics as any)?.coverage?.by_status ?? {};
+  const nQueued = Number(cov.QUEUED ?? 0);
+  const nProbing = Number(cov.PROBING ?? 0);
+  const nActive = nQueued + nProbing;   // work still in flight on the server
+
+  const refreshLive = () =>
+    Promise.all([api.getQueueStatus(), api.getCoverageMetrics()])
+      .then(([q, m]) => { setQueue(q); setMetrics(m); });
 
   useEffect(() => {
     Promise.all([api.listCells(), api.listCompetitors(), api.getQueueStatus(), api.getCoverageMetrics()])
@@ -51,6 +61,14 @@ export default function CollectPage() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  // Auto-poll while server-side collection is in flight. Because state lives in
+  // the DB, this resumes correctly even after navigating away and back.
+  useEffect(() => {
+    if (nActive <= 0) return;
+    const t = setInterval(() => { refreshLive(); }, 5000);
+    return () => clearInterval(t);
+  }, [nActive]);
 
   async function handlePin() {
     if (!pinCell || !pinComp) return;
@@ -121,30 +139,25 @@ export default function CollectPage() {
 
   // #50 Batch: probe every queued pair one at a time with live progress.
   // Sequential (each probe is heavy: search + fetch + AI score). Stoppable.
-  async function handleBatchProbe() {
-    const targets = [...queue];
-    if (targets.length === 0) return;
-    batchStop.current = false;
-    setBatch({ running: true, done: 0, total: targets.length });
-    for (let i = 0; i < targets.length; i++) {
-      if (batchStop.current) break;
-      const item = targets[i];
-      const key = `${item.cell_id}|${item.competitor_id}`;
-      setProbing(key);
-      try {
-        const r = await api.probeNow(item.cell_id, item.competitor_id);
-        setProbeResults((prev) => ({
-          ...prev,
-          [key]: `找到 ${r.candidates_found} · 通过 ${r.passed} · ${r.state}`,
-        }));
-      } catch (e) {
-        setProbeResults((prev) => ({ ...prev, [key]: e instanceof Error ? e.message : "采集失败" }));
-      }
-      setBatch({ running: true, done: i + 1, total: targets.length });
+  // #51 Async batch: dispatch all queued pairs to the Celery workers, then let
+  // the DB-backed poller (above) show live counts. Returns instantly; the work
+  // runs server-side, so navigating away / closing the tab doesn't lose it.
+  async function handleDispatch() {
+    setDispatching(true);
+    setDispatchMsg("");
+    try {
+      const r = await api.dispatchQueued();
+      setDispatchMsg(
+        r.dispatched > 0
+          ? `已派发 ${r.dispatched} 个采集任务到后台，进度会自动刷新（可离开本页）`
+          : "队列为空，请先「加入采集队列」再派发"
+      );
+      await refreshLive();
+    } catch (e) {
+      setDispatchMsg(e instanceof Error ? e.message : "派发失败");
+    } finally {
+      setDispatching(false);
     }
-    setProbing(null);
-    setBatch((b) => ({ ...b, running: false }));
-    await loadQueue();
   }
 
   const cellMap = Object.fromEntries(cells.map((c) => [c.id, c]));
@@ -210,9 +223,11 @@ export default function CollectPage() {
         );
       })()}
 
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 text-sm text-amber-800">
-        采集引擎在后台 Celery worker 中运行。开发环境开启 mock 模式时采集会立即返回模拟数据；
-        关闭 mock 后且 worker 运行时将进行真实网页采集 + Claude AI 评分。
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-6 text-sm text-blue-800 leading-relaxed">
+        <div className="font-medium mb-1">采集怎么跑</div>
+        点「立即采集 / 批量采集」会<strong>实时执行</strong>：搜索引擎找页面 → 抓取网页 →
+        Claude AI 评分打分 → 通过的证据入库待审核。单个约需 1-3 分钟（含真实搜索+抓取+评分），
+        批量时按进度条逐个执行。有证据的格子标为「待审核」，搜不到的标为「已拒绝(空)」。
       </div>
 
       <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6">
@@ -359,42 +374,40 @@ export default function CollectPage() {
           </h2>
           <div className="flex items-center gap-3">
             {queue.length > 0 && (
-              batch.running ? (
-                <button
-                  onClick={() => { batchStop.current = true; }}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 text-white hover:bg-amber-600 transition-colors font-medium"
-                >
-                  ⏹ 停止（{batch.done}/{batch.total}）
-                </button>
-              ) : (
-                <button
-                  onClick={handleBatchProbe}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors font-medium"
-                >
-                  ▶ 批量采集全部（{queue.length}）
-                </button>
-              )
+              <button
+                onClick={handleDispatch}
+                disabled={dispatching}
+                className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors font-medium"
+              >
+                {dispatching ? "派发中…" : `▶ 后台批量采集（${queue.length}）`}
+              </button>
             )}
             <button
-              onClick={() => { setLoading(true); loadQueue().finally(() => setLoading(false)); }}
+              onClick={() => { setLoading(true); refreshLive().finally(() => setLoading(false)); }}
               className="text-xs text-indigo-500 hover:text-indigo-700"
             >
               刷新
             </button>
           </div>
         </div>
-        {batch.running && (
+        {(nActive > 0 || dispatchMsg) && (
           <div className="px-5 pt-3">
-            <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
-              <span>采集进度</span>
-              <span>{batch.done} / {batch.total}</span>
-            </div>
-            <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-indigo-500 transition-all"
-                style={{ width: `${batch.total ? (batch.done / batch.total) * 100 : 0}%` }}
-              />
-            </div>
+            {dispatchMsg && <div className="text-xs text-gray-500 mb-2">{dispatchMsg}</div>}
+            {nActive > 0 && (
+              <>
+                <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                  <span>
+                    后台采集中
+                    <span className="ml-1 text-indigo-600">采集中 {nProbing}</span>
+                    <span className="ml-1 text-amber-600">待采 {nQueued}</span>
+                  </span>
+                  <span className="text-gray-400">每 5 秒自动刷新 · 可离开本页</span>
+                </div>
+                <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-indigo-500 animate-pulse" style={{ width: "100%" }} />
+                </div>
+              </>
+            )}
           </div>
         )}
         {loading ? (

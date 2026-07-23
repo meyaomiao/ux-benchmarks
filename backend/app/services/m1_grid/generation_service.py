@@ -27,15 +27,14 @@ _MOCK = GridGenerationResponse(
     jtbd_tasks=["邀请协作者+权限分级", "创建首个项目/工作区", "追踪任务进度", "设置通知与提醒"],
     journey_stages=["首次配置", "日常使用", "异常处理"],
     cells=[
-        GeneratedCell(jtbd="邀请协作者+权限分级", journey_stage="首次配置", page_state="角色选择页", value_score=0.9),
-        GeneratedCell(jtbd="邀请协作者+权限分级", journey_stage="首次配置", page_state="权限冲突提示（异常态）", value_score=0.85),
-        GeneratedCell(jtbd="邀请协作者+权限分级", journey_stage="首次配置", page_state="邀请弹窗（空状态）", value_score=0.8),
-        GeneratedCell(jtbd="创建首个项目/工作区", journey_stage="首次配置", page_state="空状态引导页", value_score=0.8),
-        GeneratedCell(jtbd="追踪任务进度", journey_stage="日常使用", page_state="看板视图", value_score=0.6),
-        GeneratedCell(jtbd="追踪任务进度", journey_stage="异常处理", page_state="数据加载失败态", value_score=0.75),
-        GeneratedCell(jtbd="设置通知与提醒", journey_stage="首次配置", page_state="通知权限请求", value_score=0.7),
+        GeneratedCell(jtbd="邀请协作者+权限分级", journey_stage="首次配置", page_state="角色权限页", scenario_detail="邀请成员时选择角色并查看各角色权限对照", value_score=0.9),
+        GeneratedCell(jtbd="邀请协作者+权限分级", journey_stage="首次配置", page_state="邀请成员页", scenario_detail="发起邀请、填写邮箱、分配角色的主流程页面", value_score=0.8),
+        GeneratedCell(jtbd="创建首个项目/工作区", journey_stage="首次配置", page_state="空状态引导", scenario_detail="首次进入无项目时的空状态与引导创建", value_score=0.8),
+        GeneratedCell(jtbd="追踪任务进度", journey_stage="日常使用", page_state="看板视图", scenario_detail="任务看板的列/卡片布局与拖拽交互", value_score=0.7),
+        GeneratedCell(jtbd="追踪任务进度", journey_stage="日常使用", page_state="任务详情页", scenario_detail="单个任务的详情、字段、评论与状态流转", value_score=0.65),
+        GeneratedCell(jtbd="设置通知与提醒", journey_stage="首次配置", page_state="通知设置页", scenario_detail="配置各类通知渠道与提醒规则的设置界面", value_score=0.6),
     ],
-    total=7,
+    total=6,
     generated_by="mock",
 )
 
@@ -79,13 +78,25 @@ def _prompt(req: GridGenerationRequest) -> str:
 - 5-7 个 JTBD 任务，聚焦最核心、最值得做标杆研究的任务（用意图语言，
   如"邀请协作者+权限分级"，不是功能名如"成员管理"）
 - 3-5 个旅程阶段（如"首次配置/日常使用/异常处理/规模化管理"）
-- 只为高价值的 JTBD×阶段组合生成页面/状态，优先非 happy-path
-  （空状态/错误态/权限边界/数据边界）
 - 整个网格总计 12-18 个格子，不要超过 18 个
-- value_score(0-1)：格子对标杆研究的价值，非 happy-path 和差异化程度高的分更高
+
+【场景粒度——非常重要】
+这些场景要能用公开网页（帮助文档/功能页/产品演示）研究到，所以：
+- 大多数格子应是**主流程/核心页面**（如"角色权限设置页""看板视图""邀请成员页"），
+  这些有公开文档、能被搜索到、也最能体现产品 UX 差异
+- 少量（不超过 1/3）可以是**关键边界态**（空状态/常见错误态），但要克制
+- 不要生成过度具体的深层异常态（如"含加密文件的部分导入失败态"）——这种公开
+  网页几乎查不到，只能靠手动截图，不适合作为默认自动采集的场景
+
+【page_state 字段格式——必须遵守】
+- page_state 必须是**简短标签，≤10 个字**，如"角色权限页""批量导入页""空状态引导"
+- 不要把整句描述塞进 page_state
+- 详细的场景说明放进 scenario_detail 字段（可以写具体，供后续分析用）
+
+- value_score(0-1)：格子对标杆研究的价值，核心且差异化程度高的分更高
 
 返回纯 JSON（无代码块）：
-{{"jtbd_tasks":["..."],"journey_stages":["..."],"cells":[{{"jtbd":"...","journey_stage":"...","page_state":"...","value_score":0.8}}]}}"""
+{{"jtbd_tasks":["..."],"journey_stages":["..."],"cells":[{{"jtbd":"...","journey_stage":"...","page_state":"短标签≤10字","scenario_detail":"这个场景/状态的详细说明","value_score":0.8}}]}}"""
 
 
 def generate_grid(req: GridGenerationRequest) -> GridGenerationResponse:

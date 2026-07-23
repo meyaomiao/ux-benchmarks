@@ -73,7 +73,10 @@ class GridGenerationRequest(BaseModel):
 class GeneratedCell(BaseModel):
     jtbd: str
     journey_stage: str
-    page_state: str
+    page_state: str  # short label (<=10 chars), used in search queries
+    # Full scenario description — feeds the mapping-card intent (used for AI
+    # relevance scoring), NOT the search query. Keeps search terms clean.
+    scenario_detail: str = ""
     value_score: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
