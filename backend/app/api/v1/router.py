@@ -1,8 +1,9 @@
 from fastapi import APIRouter
-from app.api.v1 import m0, m1, m2, m3, m4, m5, l5, projects
+from app.api.v1 import m0, m1, m2, m3, m4, m5, l5, projects, jobs
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(projects.router)
+api_router.include_router(jobs.router)
 api_router.include_router(m0.router)
 api_router.include_router(m1.router)
 api_router.include_router(m2.router)

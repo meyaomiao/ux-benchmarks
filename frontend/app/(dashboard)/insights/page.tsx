@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
+import { useJob } from "@/lib/useJob";
 import type { GridCell, Competitor, Insight, CoverageRow } from "@/lib/types";
 
 //---- helpers ---------------------------------------------------------------
@@ -225,7 +226,7 @@ function InsightCard({ insight, competitorLabel, cellLabel, onSave }: InsightCar
 }
 // ---- Page ------------------------------------------------------------------
 
-export default function InsightsPage() {
+function InsightsPageInner() {
   const searchParams = useSearchParams();
   const [cells, setCells] = useState<GridCell[]>([]);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
@@ -237,8 +238,14 @@ export default function InsightsPage() {
   // Generate form state
   const [genCellId, setGenCellId] = useState<string>("");
   const [genCompetitorId, setGenCompetitorId] = useState<string>("");
-  const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
+
+  // #53 Async insight generation — runs server-side, survives navigation.
+  const refetchInsights = useCallback(() => {
+    api.listInsights().then(setInsights).catch(() => {});
+  }, []);
+  const insightJob = useJob("insight_gen", () => refetchInsights());
+  const generating = insightJob.running;
 
   useEffect(() => {
     // Carry cell+competitor from the review step: /insights?cell_id=…&competitor_id=…
@@ -283,15 +290,11 @@ export default function InsightsPage() {
 
   async function handleGenerate() {
     if (!genCellId || !genCompetitorId) return;
-    setGenerating(true);
     setGenError(null);
     try {
-      const insight = await api.generateInsight(genCellId, genCompetitorId);
-      setInsights((prev) => [insight, ...prev]);
+      await insightJob.start({ cell_id: genCellId, competitor_id: genCompetitorId });
     } catch (e) {
       setGenError(e instanceof Error ? e.message : "生成失败");
-    } finally {
-      setGenerating(false);
     }
   }
 
@@ -447,6 +450,15 @@ export default function InsightsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// useSearchParams requires a Suspense boundary for static prerendering (Next 14).
+export default function InsightsPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-gray-400 text-sm">加载中…</div>}>
+      <InsightsPageInner />
+    </Suspense>
   );
 }
 

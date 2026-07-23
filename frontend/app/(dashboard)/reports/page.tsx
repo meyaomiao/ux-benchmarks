@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { api } from "@/lib/api";
+import { useJob } from "@/lib/useJob";
 import type { Insight, Report, ReportAudience, ReportFormat } from "@/lib/types";
 
 // ---- helpers ---------------------------------------------------------------
@@ -138,11 +139,21 @@ export default function ReportsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [audience, setAudience] = useState<ReportAudience>("designer");
   const [format, setFormat] = useState<ReportFormat>("review_15min");
-  const [composing, setComposing] = useState(false);
   const [composeError, setComposeError] = useState<string | null>(null);
 
   // Viewer state
   const [viewing, setViewing] = useState<Report | null>(null);
+
+  // #53 Async report compose — runs server-side, survives navigation.
+  const reportJob = useJob("report_compose", async (result) => {
+    const rpts = await api.listReports();
+    setReports(rpts);
+    setSelected(new Set());
+    const newId = result?.report_id;
+    const fresh = rpts.find((r) => r.id === newId);
+    if (fresh) setViewing(fresh);
+  });
+  const composing = reportJob.running;
 
   useEffect(() => {
     Promise.all([api.listInsights(), api.listReports()])
@@ -174,21 +185,11 @@ export default function ReportsPage() {
   async function handleCompose(insightIds?: string[]) {
     const ids = insightIds ?? Array.from(selected);
     if (ids.length === 0) return;
-    setComposing(true);
     setComposeError(null);
     try {
-      const report = await api.composeReport({
-        insight_ids: ids,
-        audience,
-        format_type: format,
-      });
-      setReports(prev => [report, ...prev]);
-      setSelected(new Set());
-      setViewing(report);
+      await reportJob.start({ insight_ids: ids, audience, format_type: format });
     } catch (e) {
       setComposeError(e instanceof Error ? e.message : "生成失败");
-    } finally {
-      setComposing(false);
     }
   }
 

@@ -599,7 +599,52 @@ export const api = {
     if (!res.ok) throw new Error(`patchMappingCard failed: ${res.status}`);
     return res.json();
   },
+
+  // Generic async jobs (#53) — long AI ops run server-side, survive navigation.
+  startJob: async (jobType: JobType, params: Record<string, unknown>): Promise<Job> => {
+    if (USE_MOCK) {
+      await new Promise(r => setTimeout(r, 200));
+      return { id: crypto.randomUUID(), project_id: "mock", job_type: jobType, status: "queued", params, result: null, error: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    }
+    const res = await pfetch(`${BASE}/jobs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_type: jobType, params }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
+  getJob: async (jobId: string): Promise<Job> => {
+    const res = await pfetch(`${BASE}/jobs/${jobId}`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
+  listJobs: async (jobType?: JobType, status?: string): Promise<Job[]> => {
+    if (USE_MOCK) return [];
+    const q = new URLSearchParams();
+    if (jobType) q.set("job_type", jobType);
+    if (status) q.set("status", status);
+    const res = await pfetch(`${BASE}/jobs?${q}`);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
 };
+
+// Async job types (#53)
+export type JobType = "discover" | "grid_gen" | "insight_gen" | "report_compose";
+export interface Job {
+  id: string;
+  project_id: string;
+  job_type: JobType;
+  status: "queued" | "running" | "done" | "failed";
+  params: Record<string, unknown>;
+  result: Record<string, any> | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 // Types for AI grid generation (exported for use in components)
 export interface GeneratedCell {

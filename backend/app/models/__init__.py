@@ -7,9 +7,11 @@ from app.models.m5_coverage import CoverageSnapshot
 from app.models.l3_insight import Insight
 from app.models.l5_report import Report
 from app.models.project import Project
+from app.models.job import Job
 
 __all__ = [
     "Project",
+    "Job",
     "CompetitorEntity",
     "DomainLexicon",
     "GridCell",

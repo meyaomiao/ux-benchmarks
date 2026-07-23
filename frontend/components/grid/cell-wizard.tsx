@@ -3,6 +3,7 @@
 import { useState, useCallback, type KeyboardEvent } from "react";
 import type { GridCell } from "@/lib/types";
 import { api } from "@/lib/api";
+import { useJob } from "@/lib/useJob";
 import type { GeneratedCell, GridGenerationResult } from "@/lib/api";
 
 type Phase = "input" | "review";
@@ -22,7 +23,6 @@ export default function CellWizard({ onDone, onClose, initialCategory = "", init
   // Prefill with already-registered competitors — the user just discovered them,
   // and grounding on real products dramatically improves JTBD relevance (#1).
   const [knownProducts, setKnownProducts] = useState<string[]>(initialCompetitors);
-  const [generating, setGenerating] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
 
   /* ── Phase B state ─────────────────────────────────────────── */
@@ -30,6 +30,17 @@ export default function CellWizard({ onDone, onClose, initialCategory = "", init
   const [cells, setCells] = useState<GeneratedCell[]>([]);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+
+  // #53 Async grid generation — runs server-side, survives navigation. On mount
+  // resumes an in-flight grid_gen job and jumps to the review phase when done.
+  const gridJob = useJob("grid_gen", (res: GridGenerationResult) => {
+    if (res) {
+      setResult(res);
+      setCells(res.cells || []);
+      setPhase("review");
+    }
+  });
+  const generating = gridJob.running;
 
   /* ── Phase A handlers ──────────────────────────────────────── */
   const addCompetitor = useCallback(() => {
@@ -47,17 +58,11 @@ export default function CellWizard({ onDone, onClose, initialCategory = "", init
   const handleGenerate = async () => {
     const cat = category.trim();
     if (!cat) return;
-    setGenerating(true);
     setGenerationError(null);
     try {
-      const res = await api.generateGrid(cat, knownProducts);
-      setResult(res);
-      setCells(res.cells);
-      setPhase("review");
+      await gridJob.start({ category: cat, known_products: knownProducts, language: "zh" });
     } catch (err) {
       setGenerationError(err instanceof Error ? err.message : "生成失败，请重试");
-    } finally {
-      setGenerating(false);
     }
   };
 

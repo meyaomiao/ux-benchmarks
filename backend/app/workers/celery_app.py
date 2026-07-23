@@ -11,6 +11,7 @@ celery_app = Celery(
     include=[
         "app.workers.tasks.health",
         "app.workers.tasks.probe_cycle",
+        "app.workers.tasks.run_job",
     ],
 )
 
@@ -25,6 +26,7 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_routes={
         "app.workers.tasks.probe_cycle.*": {"queue": "adapters"},
+        "app.workers.tasks.run_job.*": {"queue": "adapters"},
         "app.workers.tasks.scoring.*": {"queue": "scoring"},
         # health tasks → adapters queue (worker already consumes it via -Q adapters,scoring)
         "app.workers.tasks.health.*": {"queue": "adapters"},

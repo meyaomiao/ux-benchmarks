@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, getCurrentProjectId } from "@/lib/api";
+import { useJob } from "@/lib/useJob";
 import { Badge } from "@/components/ui/badge";
 import type { Competitor, LexiconEntry, CompetitorType, DiscoverySuggestion } from "@/lib/types";
 
@@ -50,38 +51,27 @@ function DiscoveryPanel({
 }) {
   // Default to the current project's category so discovery searches the right subject.
   const [category, setCategory] = useState(initialCategory);
-  const [discovering, setDiscovering] = useState(false);
   const [suggestions, setSuggestions] = useState<DiscoverySuggestion[]>([]);
   const [added, setAdded] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
 
+  // #53 Async discovery — runs server-side (all 3 tiers in one job), survives
+  // navigation. On mount, resumes an in-flight discover job automatically.
+  const discoverJob = useJob("discover", (result) => {
+    setSuggestions(result?.suggestions ?? []);
+  });
+  const discovering = discoverJob.running;
+
   async function handleDiscover() {
     if (!category.trim()) return;
-    setDiscovering(true);
     setError(null);
     setSuggestions([]);
     onCategoryChange(category.trim());  // carry the category to the next step
-    const cat = category.trim();
-    // Fire the three tiers in parallel; each appends as it returns so the user
-    // sees the first batch in ~20s instead of waiting ~60s for one big call.
-    const tiers = ["direct", "indirect", "cross_industry"] as const;
-    let anyOk = false;
-    await Promise.all(
-      tiers.map(async (t) => {
-        try {
-          const part = await api.discoverCompetitors(cat, knownProducts, t);
-          anyOk = true;
-          setSuggestions((prev) => {
-            const seen = new Set(prev.map((s) => s.name.toLowerCase()));
-            return [...prev, ...part.filter((s) => !seen.has(s.name.toLowerCase()))];
-          });
-        } catch {
-          // one tier failing shouldn't blank the whole panel
-        }
-      })
-    );
-    if (!anyOk) setError("发现失败，请重试");
-    setDiscovering(false);
+    try {
+      await discoverJob.start({ category: category.trim(), known_products: knownProducts });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "发现失败，请重试");
+    }
   }
 
   const [adding, setAdding] = useState<Set<string>>(new Set());
