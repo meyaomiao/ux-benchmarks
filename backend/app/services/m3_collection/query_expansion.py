@@ -84,14 +84,22 @@ def expand_terms_for_cell(
     intents = _intent_terms()
     versions = _version_terms()
 
-    # help_docs: scope to help/docs subdomains and pair with intent modifiers.
+    # help_docs: clean competitor-scoped queries. NO site:* wildcards — most
+    # engines don't support them and they cause timeouts. Relevance comes from
+    # leading with the competitor NAME, then the scenario phrase + "help/docs".
+    # Competitor-less queries are useless (won't match the target product), so
+    # only emit them when we have no competitor at all.
     help_docs: list[str] = []
-    for scope in ("site:help.* ", "site:docs.* "):
-        help_docs.append(f"{scope}{base_phrase}")
+    if competitors:
+        for name in competitors:
+            help_docs.append(f"{name} {base_phrase} help")
+            help_docs.append(f"{name} {base_phrase} docs")
+            for intent in intents[:2]:
+                help_docs.append(f"{name} {base_phrase} {intent}")
+    else:
+        help_docs.append(f"{base_phrase} help docs")
         for intent in intents:
-            help_docs.append(f"{scope}{base_phrase} {intent}")
-        for term in lexicon:
-            help_docs.append(f"{scope}{base_phrase} {term}")
+            help_docs.append(f"{base_phrase} {intent}")
 
     # interactive_demo: demo/tour phrasing, optionally prefixed by competitor.
     interactive_demo: list[str] = []

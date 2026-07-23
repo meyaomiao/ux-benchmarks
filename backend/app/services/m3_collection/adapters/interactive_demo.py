@@ -303,7 +303,7 @@ class InteractiveDemoAdapter:
         page = browser.new_page()
         candidates: list[Candidate] = []
         try:
-            page.goto(page_url, wait_until="networkidle", timeout=20_000)
+            page.goto(page_url, wait_until="domcontentloaded", timeout=8_000)
 
             # Find iframes with known demo-platform src signatures.
             iframe_elements = page.query_selector_all("iframe")

@@ -75,11 +75,11 @@ async def list_source_registry(
 # --- Manual screenshot (#30) ------------------------------------------------
 
 @router.post("/manual-screenshot", status_code=201)
-async def manual_screenshot(data: dict, db: Session = Depends(get_db)):
+def manual_screenshot(data: dict, db: Session = Depends(get_db)):
     """Take a Playwright screenshot of a URL and add it to the shortlist.
 
-    Body: {"url": "https://...", "cell_id": "uuid", "competitor_id": "uuid"}
-    Returns the persisted Asset summary.
+    Sync def (not async) so Playwright sync API runs in a threadpool without
+    an event loop. Body: {"url", "cell_id", "competitor_id"}. Returns Asset.
     """
     url = (data.get("url") or "").strip()
     if not url or not url.startswith("http"):
@@ -148,11 +148,12 @@ async def enqueue_all(
 # --- Synchronous probe (#5) -------------------------------------------------
 
 @router.post("/probe-now")
-async def probe_now(data: dict, db: Session = Depends(get_db)):
+def probe_now(data: dict, db: Session = Depends(get_db)):
     """Run one probe cycle synchronously and return the result immediately.
 
     Body: {"cell_id": "uuid", "competitor_id": "uuid"}
-    Lets the UI show collection progress even when no Celery worker is running.
+    Sync def (not async) so it runs in a threadpool without an event loop —
+    required for the Playwright sync API used by the interactive-demo adapter.
     """
     try:
         cell_id = UUID(str(data.get("cell_id", "")))

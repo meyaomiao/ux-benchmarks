@@ -43,7 +43,7 @@ _SNIPPET_CHARS = 160
 
 # Live-mode HTTP settings. A realistic UA reduces trivial bot-blocking; the
 # timeout keeps a slow/hung server from stalling the whole collection run.
-_HTTP_TIMEOUT_SECONDS = 10.0
+_HTTP_TIMEOUT_SECONDS = 6.0
 _USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "

@@ -24,7 +24,12 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 _RESULTS_PER_QUERY = 5
-_MAX_URLS_TOTAL = 20
+# Cap URLs actually fetched per probe. Each fetch (httpx 6s / Playwright 8s) is
+# serial, so a big cap = minutes. 5 keeps one probe bounded to well under a minute.
+_MAX_URLS_TOTAL = 5
+# Cap real search-engine calls per probe so one probe can't fan out into a
+# dozen slow searches (each ~8-20s).
+_MAX_SEARCHES_PER_PROBE = 2
 
 
 # ---------------------------------------------------------------------------
@@ -60,16 +65,23 @@ def _mock_search(query: str, n: int = _RESULTS_PER_QUERY) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def _duckduckgo_search(query: str, n: int) -> list[str]:
-    """Search via duckduckgo_search package -- no API key required.
+    """Search via the `ddgs` package (successor to duckduckgo_search).
 
-    Uses DDG's internal API. Suitable for development and moderate production
-    use. Raises on failure -- caller catches and falls back to mock.
+    No API key required. Raises on failure -- caller decides how to handle it.
     """
-    from duckduckgo_search import DDGS  # lazy import
+    from ddgs import DDGS  # lazy import
 
     urls: list[str] = []
-    with DDGS() as ddgs:
-        for r in ddgs.text(query, max_results=n):
+    # Hard per-query timeout so one slow/blocked backend can't stall the probe.
+    # Pin to a single backend where supported (ddgs otherwise retries across
+    # yandex/google/bing serially, each with its own timeout = minutes).
+    with DDGS(timeout=8) as ddgs:
+        try:
+            results = ddgs.text(query, max_results=n, backend="duckduckgo")
+        except TypeError:
+            # Older/newer ddgs without the backend kwarg — fall back to default.
+            results = ddgs.text(query, max_results=n)
+        for r in results:
             href = r.get("href") or r.get("url")
             if href:
                 urls.append(href)
@@ -130,15 +142,17 @@ def _serpapi_search(query: str, n: int) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def search_urls(query: str, n: int = _RESULTS_PER_QUERY) -> list[str]:
-    """Return up to `n` URLs for `query`.
+    """Return up to `n` real result URLs for `query`.
 
     Provider selection order:
-      1. Mock         -- when use_collection_mock=True
+      1. Mock URLs    -- ONLY when use_collection_mock=True (offline/dev fixtures)
       2. Brave/SerpAPI-- when SEARCH_API_KEY is set in .env
       3. DuckDuckGo   -- default, zero config, no key needed
-      4. Mock fallback-- on any failure
 
-    Always returns something.
+    In real mode (use_collection_mock=False), a search failure returns [] —
+    we do NOT fabricate mock URLs, because those point to nonexistent domains
+    and would silently yield zero candidates while looking like a "no results"
+    outcome. Empty means "search unavailable", which the caller surfaces.
     """
     if settings.use_collection_mock:
         return _mock_search(query, n)
@@ -159,22 +173,27 @@ def search_urls(query: str, n: int = _RESULTS_PER_QUERY) -> list[str]:
     try:
         return _duckduckgo_search(query, n)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("search_service: DDG failed for %r, using mock: %s", query[:60], exc)
-        return _mock_search(query, n)
+        # Real mode: do NOT fabricate fake URLs. Return empty; caller reports it.
+        logger.warning("search_service: DDG failed for %r: %s", query[:60], exc)
+        return []
 
 
 def resolve_queries_to_urls(
     queries: list[str],
     *,
     max_total: int = _MAX_URLS_TOTAL,
+    max_searches: int = _MAX_SEARCHES_PER_PROBE,
 ) -> list[str]:
     """Resolve a list of query strings into a deduplicated URL list.
 
-    Queries that already look like http(s) URLs are passed through unchanged.
-    Non-URL queries are resolved via search_urls(). Total capped at max_total.
+    Queries that already look like http(s) URLs are passed through unchanged
+    (free — no network). Non-URL queries are resolved via search_urls(), but at
+    most `max_searches` of them actually hit the search engine, so one probe
+    can't fan out into a dozen slow searches. Total URLs capped at max_total.
     """
     seen: set[str] = set()
     urls: list[str] = []
+    searches_done = 0
 
     for query in queries:
         if len(urls) >= max_total:
@@ -185,6 +204,9 @@ def resolve_queries_to_urls(
                 seen.add(query)
                 urls.append(query)
         else:
+            if searches_done >= max_searches:
+                continue  # search budget spent — skip remaining search queries
+            searches_done += 1
             remaining = max_total - len(urls)
             for url in search_urls(query, n=min(_RESULTS_PER_QUERY, remaining)):
                 if url not in seen:
