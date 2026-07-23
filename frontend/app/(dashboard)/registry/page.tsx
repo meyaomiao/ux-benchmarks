@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, getCurrentProjectId } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import type { Competitor, LexiconEntry, CompetitorType, DiscoverySuggestion } from "@/lib/types";
 
@@ -39,14 +39,17 @@ function DiscoveryPanel({
   onClose,
   onGoToGrid,
   onCategoryChange,
+  initialCategory,
 }: {
   knownProducts: string[];
   onAdd: (s: DiscoverySuggestion) => Promise<void>;
   onClose: () => void;
   onGoToGrid: () => void;
   onCategoryChange: (category: string) => void;
+  initialCategory: string;
 }) {
-  const [category, setCategory] = useState("项目管理工具");
+  // Default to the current project's category so discovery searches the right subject.
+  const [category, setCategory] = useState(initialCategory);
   const [discovering, setDiscovering] = useState(false);
   const [suggestions, setSuggestions] = useState<DiscoverySuggestion[]>([]);
   const [added, setAdded] = useState<Set<string>>(new Set());
@@ -221,12 +224,18 @@ export default function RegistryPage() {
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [showDiscover, setShowDiscover] = useState(false);
   const [discoverCategory, setDiscoverCategory] = useState("");
+  // Current project's research category — used as the discover panel default so
+  // "AI 发现竞品" searches the RIGHT subject, not a hardcoded one.
+  const [projectCategory, setProjectCategory] = useState("");
 
   useEffect(() => {
-    Promise.all([api.listCompetitors(), api.listLexicon()])
-      .then(([c, l]) => {
+    const pid = getCurrentProjectId();
+    Promise.all([api.listCompetitors(), api.listLexicon(), api.listProjects()])
+      .then(([c, l, projects]) => {
         setCompetitors(c.items);
         setLexicon(l.items);
+        const current = projects.find((p) => p.id === pid);
+        if (current?.category) setProjectCategory(current.category);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -270,6 +279,7 @@ export default function RegistryPage() {
       {showDiscover && (
         <DiscoveryPanel
           knownProducts={knownNames}
+          initialCategory={projectCategory}
           onAdd={handleAddSuggestion}
           onClose={() => setShowDiscover(false)}
           onCategoryChange={setDiscoverCategory}
