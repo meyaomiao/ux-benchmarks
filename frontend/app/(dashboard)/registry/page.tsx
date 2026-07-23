@@ -225,6 +225,21 @@ export default function RegistryPage() {
     setCompetitors(prev => [created, ...prev]);
   }
 
+  async function handleDeleteCompetitor(c: Competitor) {
+    if (!confirm(`确认删除竞品「${c.canonical_name}」？若已有证据/洞察引用，会转为「已排除」而非彻底删除。`)) return;
+    try {
+      const { mode } = await api.deleteCompetitor(c.id);
+      if (mode === "hard") {
+        setCompetitors(prev => prev.filter(x => x.id !== c.id));
+      } else {
+        // soft-deleted → mark excluded locally
+        setCompetitors(prev => prev.map(x => x.id === c.id ? { ...x, status: "excluded" as Competitor["status"] } : x));
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "删除失败");
+    }
+  }
+
   const filtered =
     typeFilter === "all"
       ? competitors
@@ -292,6 +307,7 @@ export default function RegistryPage() {
                 <th className="text-left px-4 py-3 font-medium">主域名</th>
                 <th className="text-left px-4 py-3 font-medium">帮助中心</th>
                 <th className="text-left px-4 py-3 font-medium">状态</th>
+                <th className="text-right px-4 py-3 font-medium">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -317,6 +333,15 @@ export default function RegistryPage() {
                   <td className="px-4 py-3 text-gray-500 text-xs">{c.help_center_domain || "—"}</td>
                   <td className="px-4 py-3">
                     <Badge variant={c.status}>{STATUS_LABEL[c.status]}</Badge>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      onClick={() => handleDeleteCompetitor(c)}
+                      className="text-xs text-gray-400 hover:text-red-500 transition-colors"
+                      title="删除竞品"
+                    >
+                      删除
+                    </button>
                   </td>
                 </tr>
               ))}

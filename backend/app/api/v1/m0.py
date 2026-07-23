@@ -7,7 +7,8 @@ from app.schemas.m0 import (
     LexiconEntryCreate, LexiconEntryUpdate, LexiconEntryRead, LexiconListResponse,
 )
 from app.services.m0_registry.competitor_service import (
-    list_competitors, get_competitor, create_competitor, update_competitor
+    list_competitors, get_competitor, create_competitor, update_competitor,
+    delete_competitor,
 )
 from app.services.m0_registry import lexicon_service
 from app.services.m0_registry.discovery_service import discover_competitors
@@ -49,6 +50,12 @@ async def update_competitor_endpoint(
     competitor_id: UUID, data: CompetitorUpdate, db: Session = Depends(get_db)
 ):
     return update_competitor(db, competitor_id, data)
+
+
+@router.delete("/competitors/{competitor_id}")
+async def delete_competitor_endpoint(competitor_id: UUID, db: Session = Depends(get_db)):
+    """Delete a competitor (hard if unreferenced, else soft-excluded)."""
+    return delete_competitor(db, competitor_id)
 
 
 # Issue #6 — Lexicon routes

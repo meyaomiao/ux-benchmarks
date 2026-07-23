@@ -84,3 +84,38 @@ def update_competitor(
     db.commit()
     db.refresh(competitor)
     return competitor
+
+
+def delete_competitor(db: Session, competitor_id: UUID) -> dict:
+    """Delete a competitor.
+
+    Hard-delete when nothing references it; otherwise soft-delete (mark
+    status='excluded') so downstream coverage/insight rows stay intact.
+    Returns {"mode": "hard"|"soft"}.
+    """
+    from app.models.m5_coverage import CoverageSnapshot
+    from app.models.l3_insight import Insight
+
+    competitor = get_competitor(db, competitor_id)
+    if not competitor:
+        raise AppError("NOT_FOUND", f"Competitor {competitor_id} not found", 404)
+
+    referenced = db.execute(
+        select(func.count())
+        .select_from(CoverageSnapshot)
+        .where(CoverageSnapshot.competitor_id == competitor_id)
+    ).scalar() or 0
+    referenced += db.execute(
+        select(func.count())
+        .select_from(Insight)
+        .where(Insight.competitor_id == competitor_id)
+    ).scalar() or 0
+
+    if referenced > 0:
+        competitor.status = "excluded"
+        db.commit()
+        return {"mode": "soft"}
+
+    db.delete(competitor)
+    db.commit()
+    return {"mode": "hard"}

@@ -72,6 +72,16 @@ export const api = {
     return res.json();
   },
 
+  deleteCompetitor: async (id: string): Promise<{ mode: string }> => {
+    if (USE_MOCK) {
+      await new Promise((r) => setTimeout(r, 150));
+      return { mode: "hard" };
+    }
+    const res = await fetch(`${BASE}/m0/competitors/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
   // M0 · Competitor auto-discovery (B)
   discoverCompetitors: async (
     category: string,
