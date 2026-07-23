@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import type { GridCell, Competitor, QueueItem } from "@/lib/types";
@@ -29,6 +29,9 @@ export default function CollectPage() {
   const [enqueueMsg, setEnqueueMsg] = useState("");
   const [probing, setProbing] = useState<string | null>(null); // "cellId|compId" being probed
   const [probeResults, setProbeResults] = useState<Record<string, string>>({});
+  // Batch collection (#50): iterate the queue, one probe at a time, live progress.
+  const [batch, setBatch] = useState<{ running: boolean; done: number; total: number }>({ running: false, done: 0, total: 0 });
+  const batchStop = useRef(false);
 
   const [metrics, setMetrics] = useState<Record<string, unknown> | null>(null);
 
@@ -114,6 +117,34 @@ export default function CollectPage() {
     } finally {
       setProbing(null);
     }
+  }
+
+  // #50 Batch: probe every queued pair one at a time with live progress.
+  // Sequential (each probe is heavy: search + fetch + AI score). Stoppable.
+  async function handleBatchProbe() {
+    const targets = [...queue];
+    if (targets.length === 0) return;
+    batchStop.current = false;
+    setBatch({ running: true, done: 0, total: targets.length });
+    for (let i = 0; i < targets.length; i++) {
+      if (batchStop.current) break;
+      const item = targets[i];
+      const key = `${item.cell_id}|${item.competitor_id}`;
+      setProbing(key);
+      try {
+        const r = await api.probeNow(item.cell_id, item.competitor_id);
+        setProbeResults((prev) => ({
+          ...prev,
+          [key]: `找到 ${r.candidates_found} · 通过 ${r.passed} · ${r.state}`,
+        }));
+      } catch (e) {
+        setProbeResults((prev) => ({ ...prev, [key]: e instanceof Error ? e.message : "采集失败" }));
+      }
+      setBatch({ running: true, done: i + 1, total: targets.length });
+    }
+    setProbing(null);
+    setBatch((b) => ({ ...b, running: false }));
+    await loadQueue();
   }
 
   const cellMap = Object.fromEntries(cells.map((c) => [c.id, c]));
@@ -326,13 +357,46 @@ export default function CollectPage() {
               <span className="ml-2 text-xs text-gray-400 font-normal">{queue.length} 条</span>
             )}
           </h2>
-          <button
-            onClick={() => { setLoading(true); loadQueue().finally(() => setLoading(false)); }}
-            className="text-xs text-indigo-500 hover:text-indigo-700"
-          >
-            刷新
-          </button>
+          <div className="flex items-center gap-3">
+            {queue.length > 0 && (
+              batch.running ? (
+                <button
+                  onClick={() => { batchStop.current = true; }}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 text-white hover:bg-amber-600 transition-colors font-medium"
+                >
+                  ⏹ 停止（{batch.done}/{batch.total}）
+                </button>
+              ) : (
+                <button
+                  onClick={handleBatchProbe}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors font-medium"
+                >
+                  ▶ 批量采集全部（{queue.length}）
+                </button>
+              )
+            )}
+            <button
+              onClick={() => { setLoading(true); loadQueue().finally(() => setLoading(false)); }}
+              className="text-xs text-indigo-500 hover:text-indigo-700"
+            >
+              刷新
+            </button>
+          </div>
         </div>
+        {batch.running && (
+          <div className="px-5 pt-3">
+            <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+              <span>采集进度</span>
+              <span>{batch.done} / {batch.total}</span>
+            </div>
+            <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-indigo-500 transition-all"
+                style={{ width: `${batch.total ? (batch.done / batch.total) * 100 : 0}%` }}
+              />
+            </div>
+          </div>
+        )}
         {loading ? (
           <div className="p-8 text-center text-gray-400 text-sm">加载中…</div>
         ) : queue.length === 0 ? (
