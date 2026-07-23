@@ -32,6 +32,7 @@ export default function CollectPage() {
   const [collectMsg, setCollectMsg] = useState("");
   const [sceneBusy, setSceneBusy] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [stopping, setStopping] = useState(false);
 
   // Advanced: fold single-pair pin (kept for补采 edge cases).
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -111,6 +112,20 @@ export default function CollectPage() {
       // best-effort
     } finally {
       setSceneBusy(null);
+    }
+  }
+
+  // 停止：取消所有待采（QUEUED→UNPROBED）。已在跑的 ≤4 个自然跑完。
+  async function handleStop() {
+    setStopping(true);
+    try {
+      const r = await api.stopCollection();
+      setCollectMsg(`已停止 ${r.stopped} 个待采任务（正在跑的少量会自然结束）`);
+      await refreshLive();
+    } catch (e) {
+      setCollectMsg(e instanceof Error ? e.message : "停止失败");
+    } finally {
+      setStopping(false);
     }
   }
 
@@ -206,7 +221,16 @@ export default function CollectPage() {
                 <span className="ml-2 text-blue-600">采集中 {nProbing}</span>
                 <span className="ml-2 text-amber-600">待采 {nQueued}</span>
               </span>
-              <span className="text-gray-400">每 5 秒自动刷新 · 可离开本页</span>
+              <div className="flex items-center gap-3">
+                <span className="text-gray-400">每 5 秒自动刷新 · 可离开本页</span>
+                <button
+                  onClick={handleStop}
+                  disabled={stopping}
+                  className="px-2.5 py-1 rounded-md bg-red-50 text-red-600 border border-red-200 hover:bg-red-100 disabled:opacity-50 transition-colors font-medium"
+                >
+                  {stopping ? "停止中…" : "⏹ 停止采集"}
+                </button>
+              </div>
             </div>
             <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
               <div className="h-full bg-indigo-500 animate-pulse" style={{ width: "100%" }} />

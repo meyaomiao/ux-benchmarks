@@ -27,6 +27,16 @@ def run_probe_cycle(self, cell_id: str, competitor_id: str):
     logger.info(f"Probe cycle start: cell={cell_id} competitor={competitor_id}")
     db = SessionLocal()
     try:
+        # Cooperative cancel: a task is only run if its pair is still QUEUED.
+        # "Stop collection" resets pending QUEUED rows → UNPROBED, so tasks still
+        # waiting in the broker see a non-QUEUED status here and skip cheaply
+        # (before the expensive search+fetch+score). Already-PROBING tasks (≤ the
+        # worker concurrency) finish naturally.
+        from app.services.m3_collection.coverage_state_service import get_or_create_snapshot
+        snap = get_or_create_snapshot(db, UUID(cell_id), UUID(competitor_id))
+        if snap.status != "QUEUED":
+            logger.info(f"Probe cycle skipped (not QUEUED, status={snap.status}): {cell_id}/{competitor_id}")
+            return {"status": "skipped", "state": snap.status}
         result = run_probe(db, UUID(cell_id), UUID(competitor_id))
     finally:
         db.close()

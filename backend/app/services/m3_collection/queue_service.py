@@ -75,6 +75,26 @@ def list_queued(db: Session, limit: int = 50, project_id: UUID | None = None) ->
     )
 
 
+def stop_queued(db: Session, project_id: UUID) -> int:
+    """Cancel pending collection: reset all QUEUED pairs → UNPROBED for a project.
+
+    Cooperative cancel — the probe task checks status at start and skips anything
+    no longer QUEUED. In-flight PROBING tasks (≤ worker concurrency) finish
+    naturally. Returns how many pending pairs were stopped.
+    """
+    from sqlalchemy import update
+    result = db.execute(
+        update(CoverageSnapshot)
+        .where(
+            CoverageSnapshot.project_id == project_id,
+            CoverageSnapshot.status == CellState.QUEUED,
+        )
+        .values(status=CellState.UNPROBED)
+    )
+    db.commit()
+    return result.rowcount or 0
+
+
 def count_queued(db: Session, project_id: UUID | None = None) -> int:
     """Total QUEUED count for a project — the TRUE number of pairs to collect,
     independent of the list_queued page limit (so the UI can show the real total)."""

@@ -8,7 +8,7 @@ from app.schemas.m3 import (
     QueueItemRead, QueueListResponse, PinRequest,
     QueryBundle, SourceRegistryListResponse,
 )
-from app.services.m3_collection.queue_service import enqueue_cell, list_queued, count_queued
+from app.services.m3_collection.queue_service import enqueue_cell, list_queued, count_queued, stop_queued
 from app.services.m3_collection.query_expansion import build_query_bundle
 from app.services.m3_collection import source_registry_service
 from app.services.m3_collection.state_machine import Trigger
@@ -177,6 +177,21 @@ async def dispatch_queued(
         except Exception as exc:  # noqa: BLE001 — broker down etc.
             raise AppError("DISPATCH_FAILED", f"派发失败（worker/broker 不可用？）：{exc}", 503)
     return {"dispatched": dispatched}
+
+
+@router.post("/stop-collection")
+async def stop_collection(
+    db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
+):
+    """Cancel pending collection: reset QUEUED pairs → UNPROBED (cooperative).
+
+    Pending tasks still in the broker skip cheaply when they fire (the task
+    guards on QUEUED status). In-flight PROBING tasks (≤ worker concurrency)
+    finish naturally. Returns how many pending pairs were stopped.
+    """
+    stopped = stop_queued(db, project_id)
+    return {"stopped": stopped}
 
 
 # --- Synchronous probe (#5) -------------------------------------------------

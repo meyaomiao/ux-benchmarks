@@ -344,6 +344,17 @@ export const api = {
     return res.json();
   },
 
+  // M3 · Stop pending collection — reset QUEUED → UNPROBED (cooperative cancel)
+  stopCollection: async (): Promise<{ stopped: number }> => {
+    if (USE_MOCK) {
+      await new Promise(r => setTimeout(r, 200));
+      return { stopped: 0 };
+    }
+    const res = await pfetch(`${BASE}/m3/stop-collection`, { method: "POST" });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+
   // M3 · Run one probe synchronously, return result immediately (#5)
   probeNow: async (cellId: string, competitorId: string): Promise<{
     state: string; candidates_found: number; passed: number; persisted: number;
