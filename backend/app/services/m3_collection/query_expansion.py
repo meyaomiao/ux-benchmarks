@@ -116,12 +116,23 @@ def expand_terms_for_cell(
         for name in competitors:
             video.append(f"{name} {base_phrase} {video_kind}")
 
-    # community: base phrase scoped by competitor name for forums / reviews.
+    # community: actively target real forums / knowledge communities — BOTH
+    # Chinese and international. Uses Google/Serper `(site:a OR site:b ...)`
+    # grouping so ONE search covers many sites, staying within the per-probe
+    # search budget (a per-site query would blow past MAX_PER_BUCKET and the
+    # search cap, so most sites would never actually run).
+    #   CN: 知乎 / 少数派 / CSDN / 掘金 / V2EX / 小红书
+    #   EN: reddit(old.) / stackoverflow / stackexchange / producthunt / HN
+    _CN_GROUP = "(site:zhihu.com OR site:sspai.com OR site:csdn.net OR site:juejin.cn OR site:v2ex.com OR site:xiaohongshu.com)"
+    _EN_GROUP = "(site:old.reddit.com OR site:stackoverflow.com OR site:stackexchange.com OR site:producthunt.com OR site:news.ycombinator.com)"
     community: list[str] = []
-    community.append(base_phrase)
     for name in competitors:
-        community.append(f"{name} {base_phrase}")
-        community.append(f"{name} {base_phrase} review")
+        community.append(f"{name} {base_phrase} {_CN_GROUP}")   # 中文社群一网打尽
+        community.append(f"{name} {base_phrase} {_EN_GROUP}")   # 国外社群一网打尽
+        community.append(f"{name} {base_phrase} 使用体验 评价")  # 兜底：不限站点
+    if not competitors:
+        community.append(f"{base_phrase} {_CN_GROUP}")
+        community.append(f"{base_phrase} {_EN_GROUP}")
 
     # generic: base terms crossed with intent and version modifiers.
     generic: list[str] = list(base)
