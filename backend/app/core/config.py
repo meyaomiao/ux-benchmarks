@@ -27,9 +27,11 @@ class Settings(BaseSettings):
     # GPT relay (OpenAI-compatible) for FAST parallel scoring of TEXT candidates.
     # When set, text-mode relevance scoring uses this instead of Claude (much
     # faster + cheaper, enabling parallel scoring of many candidates per probe).
-    # Image candidates still use Claude Vision. Empty => fall back to Claude.
+    # Both text AND image candidates use the GPT relay when a key is set (GPT
+    # 5.6 vision tested ≥ Claude Vision and faster). Empty => fall back to Claude.
     gpt_api_key: str = ""
     gpt_base_url: str = "https://deepkey.top/v1"
-    gpt_scorer_model: str = "gpt-5.6-luna"
+    gpt_scorer_model: str = "gpt-5.6-luna"       # text-mode scoring
+    gpt_vision_model: str = "gpt-5.6-luna"       # image-mode scoring (vision)
 
 settings = Settings()

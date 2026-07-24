@@ -211,11 +211,12 @@ class RelevanceScorer:
                 evidence_hint=candidate.evidence_type_hint,
                 has_image=has_image,
             )
-        elif (not has_image) and settings.gpt_api_key:
-            # TEXT candidates (the bulk — help docs / community / articles) go to
-            # the fast GPT relay (luna). This is what makes parallel scoring of
-            # many candidates per probe affordable. Image candidates still use
-            # Claude Vision below. Falls back to mock on failure.
+        elif settings.gpt_api_key:
+            # ALL candidates go to the GPT relay — text (luna) and images
+            # (vision). GPT 5.6 vision tested ≥ Claude Vision and faster, and
+            # this keeps everything on one relay for fast parallel scoring.
+            # Falls back to mock on failure. Claude is only used when no GPT key.
+            img = (candidate.image_path or anchor_image_path) if has_image else None
             try:
                 rubric, reasoning = self._score_with_gpt(
                     text=text,
@@ -223,8 +224,9 @@ class RelevanceScorer:
                     inclusion_criteria=inclusion_criteria,
                     exclusion_criteria=exclusion_criteria,
                     evidence_hint=candidate.evidence_type_hint,
+                    image_path=img,
                 )
-                scored_by = f"gpt:{settings.gpt_scorer_model}"
+                scored_by = f"gpt:{settings.gpt_vision_model if img else settings.gpt_scorer_model}"
             except Exception as exc:  # never crash the pipeline
                 logger.warning(
                     "GPT relevance scoring failed for candidate %s, "
@@ -291,38 +293,65 @@ class RelevanceScorer:
         inclusion_criteria: str,
         exclusion_criteria: str,
         evidence_hint,
+        image_path: Optional[str] = None,
     ) -> tuple[RubricBreakdown, str]:
-        """Fast TEXT-mode scoring via the GPT relay (OpenAI-compatible).
+        """Scoring via the GPT relay (OpenAI-compatible). Handles BOTH modes:
+
+        - image_path given → vision mode: the model SEES the screenshot, so it
+          can judge evidence_directness as "observed" (real UI shown).
+        - text only → judges from fetched page text and must NOT claim to have
+          "seen" the UI (keeps evidence_directness honest).
 
         Same 5-dimension rubric + JSON contract as Claude, so all downstream
-        (_combine, text ceiling, evidence drawer) is unchanged. Text-only: the
-        page has no screenshot, so the model must judge from the description and
-        cannot claim to have "seen" the UI (keeps evidence_directness honest).
+        (_combine, text ceiling, evidence drawer) is unchanged.
         """
+        import base64
         import urllib.request
 
-        prompt = (
-            "你是 UX 竞品研究的证据相关性评分器。判断下面抓取到的网页正文，是否是"
-            "目标场景的高质量、可复现证据。只依据文字描述判断——网页没有截图，"
-            "所以不能认为你'看到了'真实 UI。\n\n"
-            f"目标场景意图：{intent_definition}\n"
-            f"应包含：{inclusion_criteria or '（未指定）'}\n"
-            f"应排除：{exclusion_criteria or '（未指定）'}\n"
-            f"证据类型提示：{getattr(evidence_hint, 'value', evidence_hint)}\n\n"
-            f"网页正文（截断）：\n{text[:3500]}\n\n"
+        has_image = bool(image_path)
+        model = settings.gpt_vision_model if has_image else settings.gpt_scorer_model
+
+        rubric_spec = (
             "按 5 个维度打分（每项 0-1 小数）：\n"
-            "- state_match: 内容是否命中目标场景/页面状态\n"
+            "- state_match: 是否命中目标场景/页面状态\n"
             "- product_match: 是否确实是目标产品（而非泛泛而谈或他家产品）\n"
             "- version_recency: 内容新鲜度/是否当前版本（无法判断给 0.5）\n"
             "- evidence_directness: 直接展示操作/界面(高) vs 仅泛泛提及(低)\n"
-            "- fidelity: 描述是否具体到可复现该场景（步骤/字段/交互）\n\n"
+            "- fidelity: 是否具体到可复现该场景（步骤/字段/交互/清晰度）\n\n"
             '只返回 JSON：{"state_match":0.0,"product_match":0.0,'
             '"version_recency":0.0,"evidence_directness":0.0,"fidelity":0.0,'
             '"reasoning":"一句话中文理由"}'
         )
+        ctx = (
+            f"目标场景意图：{intent_definition}\n"
+            f"应包含：{inclusion_criteria or '（未指定）'}\n"
+            f"应排除：{exclusion_criteria or '（未指定）'}\n"
+            f"证据类型提示：{getattr(evidence_hint, 'value', evidence_hint)}\n\n"
+        )
+
+        if has_image:
+            with open(image_path, "rb") as f:
+                img_b64 = base64.b64encode(f.read()).decode()
+            prompt = (
+                "你是 UX 竞品研究的证据相关性评分器。看这张产品界面截图，判断它是否是"
+                "目标场景的高质量证据（你能直接看到真实 UI）。\n\n" + ctx + rubric_spec
+            )
+            content = [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+            ]
+        else:
+            prompt = (
+                "你是 UX 竞品研究的证据相关性评分器。判断下面抓取到的网页正文，是否是"
+                "目标场景的高质量、可复现证据。只依据文字描述判断——网页没有截图，"
+                "所以不能认为你'看到了'真实 UI。\n\n" + ctx
+                + f"网页正文（截断）：\n{text[:3500]}\n\n" + rubric_spec
+            )
+            content = prompt
+
         body = json.dumps({
-            "model": settings.gpt_scorer_model,
-            "messages": [{"role": "user", "content": prompt}],
+            "model": model,
+            "messages": [{"role": "user", "content": content}],
             "temperature": 0,
         }).encode()
         req = urllib.request.Request(
@@ -333,7 +362,7 @@ class RelevanceScorer:
                 "Content-Type": "application/json",
             },
         )
-        with urllib.request.urlopen(req, timeout=40) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             payload = json.load(resp)
         raw = payload["choices"][0]["message"]["content"]
         data = _extract_json(raw)
