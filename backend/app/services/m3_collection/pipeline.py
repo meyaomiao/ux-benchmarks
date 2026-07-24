@@ -27,7 +27,8 @@ from app.core.config import settings
 from app.services.m2_mapping.mapping_service import get_mapping_card_by_cell
 from app.services.m3_collection.adapters.help_docs import HelpDocsAdapter
 from app.services.m3_collection.adapters.interactive_demo import InteractiveDemoAdapter
-from app.services.m3_collection.contracts import Adapter, Candidate, Score, Scorer
+from app.services.m3_collection.adapters.web_source import WebSourceAdapter
+from app.services.m3_collection.contracts import Adapter, Candidate, Score, Scorer, SourceType
 from app.services.m3_collection.query_expansion import build_query_bundle
 from app.services.m3_collection.scoring.relevance_scorer import RelevanceScorer
 from app.services.m3_collection.search_service import resolve_queries_to_urls
@@ -73,7 +74,16 @@ def run_probe_pipeline(
     elif adapter is not None:
         _adapters = [adapter]
     else:
-        _adapters = [HelpDocsAdapter(), InteractiveDemoAdapter()]
+        # help docs + interactive demo + community(forums/Q&A) + generic(blogs/
+        # articles). The web adapters consume the community/generic buckets that
+        # were previously computed but never fetched — this is what surfaces the
+        # non-official-site evidence (forums, knowledge communities, reviews).
+        _adapters = [
+            HelpDocsAdapter(),
+            InteractiveDemoAdapter(),
+            WebSourceAdapter(SourceType.COMMUNITY),
+            WebSourceAdapter(SourceType.GENERIC),
+        ]
 
     scorer = scorer or RelevanceScorer()
 

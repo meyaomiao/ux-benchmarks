@@ -34,6 +34,7 @@ from uuid import UUID
 from app.core.config import settings
 
 from ..contracts import Candidate, EvidenceType, SourceType
+from ..content_fetch import fetch_main_text
 
 logger = logging.getLogger(__name__)
 
@@ -206,41 +207,19 @@ class HelpDocsAdapter:
                 continue
 
             url = query.strip()
+            # Shared main-content fetcher: trafilatura extracts the real doc body
+            # (nav/footer/ads stripped) with 12s timeout + retry. Fixes the old
+            # bug where we sent nav-menu text to the scorer (→ score 0) and where
+            # a 6s timeout dropped slow help sites like helpx.adobe.com.
             try:
-                resp = httpx.get(
-                    url,
-                    headers=headers,
-                    timeout=_HTTP_TIMEOUT_SECONDS,
-                    follow_redirects=True,
-                )
-                resp.raise_for_status()
+                got = fetch_main_text(url)
             except Exception as exc:  # noqa: BLE001 - network is best-effort
                 logger.warning("help_docs live fetch failed for %s: %s", url, exc)
                 continue
+            if not got:
+                continue  # SPA shell / binary / blocked — no usable text
 
-            try:
-                soup = BeautifulSoup(resp.text, "html.parser")
-            except Exception as exc:  # noqa: BLE001 - malformed HTML
-                logger.warning("help_docs live parse failed for %s: %s", url, exc)
-                continue
-
-            # Title.
-            title = ""
-            if soup.title and soup.title.string:
-                title = soup.title.string.strip()
-
-            # Strip non-content elements before extracting text.
-            for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
-                tag.decompose()
-
-            # Prefer a <main>/<article> region; fall back to <body>.
-            region = soup.find("main") or soup.find("article") or soup.body or soup
-            text = " ".join(region.get_text(separator=" ").split())
-
-            # Best-effort product_version from a meta tag or "Last updated" text.
-            product_version = self._extract_version(soup, text)
-
-            text_content = text[:_TEXT_CONTENT_CHARS]
+            title, text = got
             candidates.append(
                 Candidate(
                     cell_id=cell_id,
@@ -249,11 +228,11 @@ class HelpDocsAdapter:
                     source_type=self.source_type,
                     title=title,
                     snippet=text[:_SNIPPET_CHARS],
-                    text_content=text_content,
+                    text_content=text,
                     image_path=None,  # no screenshots in this adapter (see #18)
-                    product_version=product_version,
+                    product_version=None,
                     rights_status="third_party_official",
-                    evidence_type_hint=_classify_evidence(text_content),
+                    evidence_type_hint=_classify_evidence(text),
                 )
             )
 

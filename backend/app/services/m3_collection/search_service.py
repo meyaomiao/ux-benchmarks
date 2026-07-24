@@ -31,16 +31,22 @@ _MAX_URLS_TOTAL = 10
 # queries per probe is fine and widens coverage.
 _MAX_SEARCHES_PER_PROBE = 3
 
-# Domains that never contain real product UI/docs — filter them out before
-# fetching (they dominated results: YouTube, press wires, social, app stores).
+# Filter ONLY sources that httpx literally can't read as text, or that are pure
+# marketing — NOT community/knowledge/review sites (the user wants those).
+# Kept OUT of collection:
+#   - video (needs transcript API — deferred to a later batch): youtube/vimeo
+#   - login-walled SPAs httpx gets nothing from: facebook/twitter/x/instagram
+#   - press wires (pure PR fluff): prnewswire/businesswire/globenewswire/prweb
+#   - app-store listings (no UX-flow text): play.google.com/apps.apple.com
+#   - company DB (no product UI): crunchbase
+# Intentionally NOT filtered (valuable, text-readable, user asked for them):
+#   reddit, quora, medium, stackoverflow, g2, capterra, trustpilot, linkedin.
 _JUNK_DOMAINS = (
     "youtube.com", "youtu.be", "vimeo.com",
+    "facebook.com", "twitter.com", "x.com", "instagram.com",
     "prnewswire.com", "businesswire.com", "globenewswire.com", "prweb.com",
-    "facebook.com", "twitter.com", "x.com", "linkedin.com", "instagram.com",
-    "reddit.com", "quora.com", "medium.com",
     "play.google.com", "apps.apple.com",
-    "crunchbase.com", "g2.com", "capterra.com", "trustpilot.com",
-    "wikipedia.org", "everycrsreport.com",
+    "crunchbase.com",
 )
 
 
