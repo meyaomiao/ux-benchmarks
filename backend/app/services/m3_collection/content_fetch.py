@@ -111,3 +111,29 @@ def fetch_main_text(url: str) -> Optional[tuple[str, str]]:
         return None  # SPA shell / nav-only — not usable evidence
 
     return _title_from_html(html) or url, text[:_MAX_CHARS]
+
+
+def fetch_many(urls: list[str], max_workers: int = 8) -> dict[str, tuple[str, str]]:
+    """Fetch many URLs CONCURRENTLY. Returns {url: (title, text)} for usable ones.
+
+    Each fetch is network-bound (I/O), so a thread pool gives near-linear speedup
+    — 28 URLs go from ~28×(fetch) serial to ceil(28/8) rounds. Failed/empty URLs
+    are simply absent from the result.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    out: dict[str, tuple[str, str]] = {}
+    if not urls:
+        return out
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(urls))) as pool:
+        futures = {pool.submit(fetch_main_text, u): u for u in urls}
+        for fut in as_completed(futures):
+            url = futures[fut]
+            try:
+                got = fut.result()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("fetch_many: %s failed: %s", url[:60], exc)
+                got = None
+            if got:
+                out[url] = got
+    return out

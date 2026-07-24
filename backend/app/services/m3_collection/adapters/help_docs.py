@@ -34,7 +34,7 @@ from uuid import UUID
 from app.core.config import settings
 
 from ..contracts import Candidate, EvidenceType, SourceType
-from ..content_fetch import fetch_main_text
+from ..content_fetch import fetch_many
 
 logger = logging.getLogger(__name__)
 
@@ -189,33 +189,17 @@ class HelpDocsAdapter:
         Network / parse errors are logged and skipped; the method returns
         whatever succeeded (possibly []).
         """
-        # Imported lazily so mock mode (the default) has no hard dependency on
-        # httpx / bs4 being installed.
-        import httpx
-        from bs4 import BeautifulSoup
-
+        # Concurrent main-content fetch: trafilatura extracts real doc body
+        # (nav/footer stripped, 12s + retry), fetch_many runs all URLs in a
+        # thread pool. Fixes both the nav-text-to-scorer bug and serial slowness.
         candidates: list[Candidate] = []
-        headers = {"User-Agent": _USER_AGENT}
+        urls = [q.strip() for q in queries if _looks_like_url(q)][: max(limit * 2, limit)]
+        fetched = fetch_many(urls)  # {url: (title, text)}
 
-        for query in queries:
+        for url in urls:  # preserve search-rank order
             if len(candidates) >= limit:
                 break
-
-            if not _looks_like_url(query):
-                # Search-string query with no URL — nothing to fetch. See docstring.
-                logger.debug("help_docs live: skipping non-URL query %r", query)
-                continue
-
-            url = query.strip()
-            # Shared main-content fetcher: trafilatura extracts the real doc body
-            # (nav/footer/ads stripped) with 12s timeout + retry. Fixes the old
-            # bug where we sent nav-menu text to the scorer (→ score 0) and where
-            # a 6s timeout dropped slow help sites like helpx.adobe.com.
-            try:
-                got = fetch_main_text(url)
-            except Exception as exc:  # noqa: BLE001 - network is best-effort
-                logger.warning("help_docs live fetch failed for %s: %s", url, exc)
-                continue
+            got = fetched.get(url)
             if not got:
                 continue  # SPA shell / binary / blocked — no usable text
 

@@ -211,6 +211,31 @@ class RelevanceScorer:
                 evidence_hint=candidate.evidence_type_hint,
                 has_image=has_image,
             )
+        elif (not has_image) and settings.gpt_api_key:
+            # TEXT candidates (the bulk — help docs / community / articles) go to
+            # the fast GPT relay (luna). This is what makes parallel scoring of
+            # many candidates per probe affordable. Image candidates still use
+            # Claude Vision below. Falls back to mock on failure.
+            try:
+                rubric, reasoning = self._score_with_gpt(
+                    text=text,
+                    intent_definition=intent_definition,
+                    inclusion_criteria=inclusion_criteria,
+                    exclusion_criteria=exclusion_criteria,
+                    evidence_hint=candidate.evidence_type_hint,
+                )
+                scored_by = f"gpt:{settings.gpt_scorer_model}"
+            except Exception as exc:  # never crash the pipeline
+                logger.warning(
+                    "GPT relevance scoring failed for candidate %s, "
+                    "falling back to mock: %s",
+                    candidate.candidate_id, exc,
+                )
+                rubric, reasoning = score_from_text(
+                    text=text, intent=intent_definition,
+                    inclusion=inclusion_criteria, exclusion=exclusion_criteria,
+                    evidence_hint=candidate.evidence_type_hint, has_image=has_image,
+                )
         else:
             try:
                 rubric, reasoning = self._score_with_claude(
@@ -258,6 +283,69 @@ class RelevanceScorer:
     # Real Claude Vision path. Lazy-imports the SDK so the module stays
     # importable offline (and in CI where anthropic may be absent).
     # ------------------------------------------------------------------
+    def _score_with_gpt(
+        self,
+        *,
+        text: str,
+        intent_definition: str,
+        inclusion_criteria: str,
+        exclusion_criteria: str,
+        evidence_hint,
+    ) -> tuple[RubricBreakdown, str]:
+        """Fast TEXT-mode scoring via the GPT relay (OpenAI-compatible).
+
+        Same 5-dimension rubric + JSON contract as Claude, so all downstream
+        (_combine, text ceiling, evidence drawer) is unchanged. Text-only: the
+        page has no screenshot, so the model must judge from the description and
+        cannot claim to have "seen" the UI (keeps evidence_directness honest).
+        """
+        import urllib.request
+
+        prompt = (
+            "你是 UX 竞品研究的证据相关性评分器。判断下面抓取到的网页正文，是否是"
+            "目标场景的高质量、可复现证据。只依据文字描述判断——网页没有截图，"
+            "所以不能认为你'看到了'真实 UI。\n\n"
+            f"目标场景意图：{intent_definition}\n"
+            f"应包含：{inclusion_criteria or '（未指定）'}\n"
+            f"应排除：{exclusion_criteria or '（未指定）'}\n"
+            f"证据类型提示：{getattr(evidence_hint, 'value', evidence_hint)}\n\n"
+            f"网页正文（截断）：\n{text[:3500]}\n\n"
+            "按 5 个维度打分（每项 0-1 小数）：\n"
+            "- state_match: 内容是否命中目标场景/页面状态\n"
+            "- product_match: 是否确实是目标产品（而非泛泛而谈或他家产品）\n"
+            "- version_recency: 内容新鲜度/是否当前版本（无法判断给 0.5）\n"
+            "- evidence_directness: 直接展示操作/界面(高) vs 仅泛泛提及(低)\n"
+            "- fidelity: 描述是否具体到可复现该场景（步骤/字段/交互）\n\n"
+            '只返回 JSON：{"state_match":0.0,"product_match":0.0,'
+            '"version_recency":0.0,"evidence_directness":0.0,"fidelity":0.0,'
+            '"reasoning":"一句话中文理由"}'
+        )
+        body = json.dumps({
+            "model": settings.gpt_scorer_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+        }).encode()
+        req = urllib.request.Request(
+            f"{settings.gpt_base_url}/chat/completions",
+            data=body,
+            headers={
+                "Authorization": f"Bearer {settings.gpt_api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=40) as resp:
+            payload = json.load(resp)
+        raw = payload["choices"][0]["message"]["content"]
+        data = _extract_json(raw)
+        rubric = RubricBreakdown(
+            state_match=_clamp01(float(data.get("state_match", 0.0))),
+            product_match=_clamp01(float(data.get("product_match", 0.0))),
+            version_recency=_clamp01(float(data.get("version_recency", 0.5))),
+            evidence_directness=_clamp01(float(data.get("evidence_directness", 0.0))),
+            fidelity=_clamp01(float(data.get("fidelity", 0.0))),
+        )
+        return rubric, str(data.get("reasoning", ""))[:400]
+
     def _score_with_claude(
         self,
         *,

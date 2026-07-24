@@ -18,7 +18,7 @@ from uuid import UUID
 
 from app.core.config import settings
 from app.services.m3_collection.contracts import Candidate, EvidenceType, SourceType
-from app.services.m3_collection.content_fetch import fetch_main_text
+from app.services.m3_collection.content_fetch import fetch_many
 
 logger = logging.getLogger(__name__)
 
@@ -55,17 +55,14 @@ class WebSourceAdapter:
 
         # `queries` are already resolved to URLs by the pipeline (it calls
         # resolve_queries_to_urls before invoking adapters in live mode).
+        urls = [u for u in queries if u.startswith("http")][: max(limit * 2, limit)]
+        fetched = fetch_many(urls)  # concurrent I/O, {url: (title, text)}
+
         candidates: list[Candidate] = []
-        for url in queries:
+        for url in urls:  # preserve search-rank order
             if len(candidates) >= limit:
                 break
-            if not url.startswith("http"):
-                continue
-            try:
-                got = fetch_main_text(url)
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("web_source fetch failed %s: %s", url[:60], exc)
-                continue
+            got = fetched.get(url)
             if not got:
                 continue  # SPA shell / binary / blocked — skip
             title, text = got

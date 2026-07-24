@@ -118,18 +118,27 @@ def run_probe_pipeline(
     # 4. Score each candidate (#19) and keep the passers.
     #    Text and image candidates are scored in their respective modes
     #    by the dual-mode scorer (PR #45).
-    scored: list[tuple[Candidate, Score]] = []
-    passed: list[tuple[Candidate, Score]] = []
-    for cand in all_candidates:
-        score = scorer.score(
+    # Score all candidates CONCURRENTLY — each score() is an LLM API call
+    # (I/O-bound), so a thread pool turns N serial calls into ceil(N/workers)
+    # rounds. This is the main lever cutting a probe from ~12min to ~1min.
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _score_one(cand: Candidate) -> tuple[Candidate, Score]:
+        return cand, scorer.score(
             cand,
             intent_definition=intent,
             inclusion_criteria=inclusion,
             exclusion_criteria=exclusion,
         )
-        scored.append((cand, score))
-        if score.passed:
-            passed.append((cand, score))
+
+    scored: list[tuple[Candidate, Score]] = []
+    passed: list[tuple[Candidate, Score]] = []
+    if all_candidates:
+        with ThreadPoolExecutor(max_workers=min(8, len(all_candidates))) as pool:
+            for cand, score in pool.map(_score_one, all_candidates):
+                scored.append((cand, score))
+                if score.passed:
+                    passed.append((cand, score))
 
     # Highest score first — image candidates tend to rank higher (TEXT_ONLY_CEILING).
     passed.sort(key=lambda cs: cs[1].score, reverse=True)
