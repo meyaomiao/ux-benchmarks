@@ -84,22 +84,23 @@ def expand_terms_for_cell(
     intents = _intent_terms()
     versions = _version_terms()
 
-    # help_docs: clean competitor-scoped queries. NO site:* wildcards — most
-    # engines don't support them and they cause timeouts. Relevance comes from
-    # leading with the competitor NAME, then the scenario phrase + "help/docs".
-    # Competitor-less queries are useless (won't match the target product), so
+    # help_docs: competitor-scoped, doc-seeking queries. Lead with the product
+    # NAME, then the scenario phrase, then EXPLICIT documentation keywords
+    # (not vague "help"/"docs" which matched marketing pages). These words steer
+    # Google (Serper) toward real help-center / user-guide pages. Junk domains
+    # (youtube, press releases, social) are filtered downstream in search_service.
+    # Competitor-less queries are useless (won't match a specific product), so
     # only emit them when we have no competitor at all.
+    _DOC_TERMS = ["documentation", "user guide", "help center", "support article"]
     help_docs: list[str] = []
     if competitors:
         for name in competitors:
-            help_docs.append(f"{name} {base_phrase} help")
-            help_docs.append(f"{name} {base_phrase} docs")
-            for intent in intents[:2]:
-                help_docs.append(f"{name} {base_phrase} {intent}")
+            for doc in _DOC_TERMS:
+                help_docs.append(f"{name} {base_phrase} {doc}")
+            help_docs.append(f"{name} {base_phrase} how to")
     else:
-        help_docs.append(f"{base_phrase} help docs")
-        for intent in intents:
-            help_docs.append(f"{base_phrase} {intent}")
+        for doc in _DOC_TERMS:
+            help_docs.append(f"{base_phrase} {doc}")
 
     # interactive_demo: demo/tour phrasing, optionally prefixed by competitor.
     interactive_demo: list[str] = []

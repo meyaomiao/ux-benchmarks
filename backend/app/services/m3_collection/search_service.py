@@ -23,13 +23,32 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-_RESULTS_PER_QUERY = 5
-# Cap URLs actually fetched per probe. Each fetch (httpx 6s / Playwright 8s) is
-# serial, so a big cap = minutes. 5 keeps one probe bounded to well under a minute.
-_MAX_URLS_TOTAL = 5
-# Cap real search-engine calls per probe so one probe can't fan out into a
-# dozen slow searches (each ~8-20s).
-_MAX_SEARCHES_PER_PROBE = 2
+_RESULTS_PER_QUERY = 6
+# Cap URLs actually fetched per probe. Each fetch (httpx 6s) is serial. With
+# Serper (fast, ~3s/search) we can afford more candidates → better recall.
+_MAX_URLS_TOTAL = 10
+# Cap real search-engine calls per probe. Serper is fast, so 3 doc-seeking
+# queries per probe is fine and widens coverage.
+_MAX_SEARCHES_PER_PROBE = 3
+
+# Domains that never contain real product UI/docs — filter them out before
+# fetching (they dominated results: YouTube, press wires, social, app stores).
+_JUNK_DOMAINS = (
+    "youtube.com", "youtu.be", "vimeo.com",
+    "prnewswire.com", "businesswire.com", "globenewswire.com", "prweb.com",
+    "facebook.com", "twitter.com", "x.com", "linkedin.com", "instagram.com",
+    "reddit.com", "quora.com", "medium.com",
+    "play.google.com", "apps.apple.com",
+    "crunchbase.com", "g2.com", "capterra.com", "trustpilot.com",
+    "wikipedia.org", "everycrsreport.com",
+)
+
+
+def _is_junk_url(url: str) -> bool:
+    """True if the URL's host is a known non-doc source (video/PR/social/etc)."""
+    from urllib.parse import urlparse
+    host = (urlparse(url).netloc or "").lower()
+    return any(host == d or host.endswith("." + d) for d in _JUNK_DOMAINS)
 
 
 # ---------------------------------------------------------------------------
@@ -234,12 +253,15 @@ def resolve_queries_to_urls(
             if searches_done >= max_searches:
                 continue  # search budget spent — skip remaining search queries
             searches_done += 1
+            # Over-fetch (2x) then drop junk domains, so the filter doesn't
+            # shrink the usable set below what the probe needs.
             remaining = max_total - len(urls)
-            for url in search_urls(query, n=min(_RESULTS_PER_QUERY, remaining)):
-                if url not in seen:
-                    seen.add(url)
-                    urls.append(url)
-                    if len(urls) >= max_total:
-                        break
+            for url in search_urls(query, n=min(_RESULTS_PER_QUERY * 2, remaining * 2 + 4)):
+                if url in seen or _is_junk_url(url):
+                    continue
+                seen.add(url)
+                urls.append(url)
+                if len(urls) >= max_total:
+                    break
 
     return urls
