@@ -199,7 +199,9 @@ class RelevanceScorer:
             part for part in (candidate.title, candidate.snippet, candidate.text_content) if part
         )
 
-        use_mock = settings.use_collection_mock or not settings.anthropic_api_key
+        use_mock = settings.use_collection_mock or not (
+            settings.gpt_api_key or settings.anthropic_api_key
+        )
         scored_by = "mock"
 
         if use_mock:
