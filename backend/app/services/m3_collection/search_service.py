@@ -30,6 +30,7 @@ _MAX_URLS_TOTAL = 10
 # Cap real search-engine calls per probe. Serper is fast, so 3 doc-seeking
 # queries per probe is fine and widens coverage.
 _MAX_SEARCHES_PER_PROBE = 3
+_SITE_PREFIX_RE = re.compile(r"^\s*site:\S+\s*")
 
 # Filter ONLY sources that httpx literally can't read as text, or that are pure
 # marketing — NOT community/knowledge/review sites (the user wants those).
@@ -149,13 +150,23 @@ def _serper_search(query: str, n: int) -> list[str]:
 
     Best coverage for niche B2B help docs (Google index) at ~1/10th SerpAPI's
     price. Raises on HTTP or parse error.
+
+    FREE-ACCOUNT QUIRK: a Serper free account rejects any query that combines a
+    search operator (e.g. ``site:``) with ``num >= 11`` — it returns HTTP 400
+    ``{"message":"Query pattern not allowed for free accounts"}``. Our probe path
+    asks for n=12 (``_RESULTS_PER_QUERY*2``), so every ``site:``-anchored query
+    (all help_docs / interactive_demo queries) silently 400'd and returned zero
+    URLs. Clamp ``num`` to 10 here — the provider layer is the right place for a
+    provider-specific limit (brave/serpapi are unaffected). Verified: num=10 → 200,
+    num=12 → 400 for the identical ``site:notion.so ...`` query.
     """
     import httpx  # lazy import
 
+    num = min(n, 10)
     resp = httpx.post(
         "https://google.serper.dev/search",
         headers={"X-API-KEY": settings.search_api_key, "Content-Type": "application/json"},
-        json={"q": query, "num": n},
+        json={"q": query, "num": num},
         timeout=10.0,
     )
     resp.raise_for_status()
@@ -241,7 +252,9 @@ def resolve_queries_to_urls(
     Queries that already look like http(s) URLs are passed through unchanged
     (free — no network). Non-URL queries are resolved via search_urls(), but at
     most `max_searches` of them actually hit the search engine, so one probe
-    can't fan out into a dozen slow searches. Total URLs capped at max_total.
+    can't fan out into a dozen slow searches. When a leading ``site:`` query
+    returns no URLs, its unanchored equivalent is retried once within the same
+    search budget. Total URLs capped at max_total.
     """
     seen: set[str] = set()
     urls: list[str] = []
@@ -262,7 +275,19 @@ def resolve_queries_to_urls(
             # Over-fetch (2x) then drop junk domains, so the filter doesn't
             # shrink the usable set below what the probe needs.
             remaining = max_total - len(urls)
-            for url in search_urls(query, n=min(_RESULTS_PER_QUERY * 2, remaining * 2 + 4)):
+            result_limit = min(_RESULTS_PER_QUERY * 2, remaining * 2 + 4)
+            found_urls = search_urls(query, n=result_limit)
+            fallback_query = _SITE_PREFIX_RE.sub("", query, count=1).strip()
+            if (
+                not found_urls
+                and fallback_query
+                and fallback_query != query.strip()
+                and searches_done < max_searches
+            ):
+                searches_done += 1
+                found_urls = search_urls(fallback_query, n=result_limit)
+
+            for url in found_urls:
                 if url in seen or _is_junk_url(url):
                     continue
                 seen.add(url)
