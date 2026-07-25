@@ -135,7 +135,7 @@ def expand_terms_for_cell(
         community.append(f"{base_phrase} {_EN_GROUP}")
 
     # generic: base terms crossed with intent and version modifiers.
-    generic: list[str] = list(base)
+    generic: list[str] = [*base, *lexicon]
     for intent in intents:
         generic.append(f"{base_phrase} {intent}")
     for version in versions:
