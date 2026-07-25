@@ -10,15 +10,21 @@ synonym expansion and site-scoping. It is NOT anchored to any information-seekin
 theory; that mapping was cut in review as over-citing. Keep the comments here
 about strings and search operators, nothing more.
 """
+import logging
+import re
+from functools import lru_cache
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.errors import AppError
 from app.models.m0_registry import CompetitorEntity, DomainLexicon
 from app.models.m1_grid import GridCell
 from app.schemas.m3 import QueryBundle
+
+logger = logging.getLogger(__name__)
 
 # Intent modifiers appended to base queries so we surface task-oriented pages
 # (guides, setup docs) rather than only marketing pages.
@@ -58,28 +64,133 @@ def _cap(items: list[str]) -> list[str]:
     return _dedup(items)[:MAX_PER_BUCKET]
 
 
+def _base_phrase(page_state: str, journey_stage: str) -> str:
+    """The scenario seed phrase (page_state + journey_stage). Shared by expand
+    and build_query_bundle so the two never drift."""
+    return " ".join(t for t in (page_state, journey_stage) if t).strip()
+
+
+_CJK_RE = re.compile(r"[一-鿿]")
+
+
+def _bare_domain(raw: str | None) -> str:
+    """Strip scheme + trailing slash from a stored domain so it can go straight
+    into a Google/Serper `site:` operator. Keeps any path (e.g. 'notion.so/help'
+    → site: honours path prefixes). Returns '' for empty/None."""
+    if not raw:
+        return ""
+    d = re.sub(r"^https?://", "", raw.strip(), flags=re.IGNORECASE)
+    return d.strip("/")
+
+
+def _site_anchor(
+    domains: dict[str, tuple[str | None, str | None]] | None,
+    name: str,
+    prefer: str,
+) -> str:
+    """Build a `site:` anchor for a competitor's OWN domains, or '' if none known.
+
+    `prefer` picks which domain leads: "help" (help-center first, for help_docs)
+    or "official" (marketing site first, for interactive_demo). The other domain
+    is kept as a secondary `site:` so a single query covers both. This is what
+    stops help_docs from pulling a rival's docs — the search can only return
+    pages on the competitor's own site.
+    """
+    if not domains:
+        return ""
+    pair = domains.get(name)
+    if not pair:
+        return ""
+    help_d, official_d = _bare_domain(pair[0]), _bare_domain(pair[1])
+    # ONE site: only. Serper free accounts reject `(site:a OR site:b)` grouping
+    # ("Query pattern not allowed for free accounts", HTTP 400), which silently
+    # killed every anchored query. A single `site:` (even with a path, e.g.
+    # `site:notion.so/help`) is accepted. Pick the preferred domain; fall back to
+    # the other if the preferred one is missing.
+    ordered = ([help_d, official_d] if prefer == "help" else [official_d, help_d])
+    for d in ordered:
+        if d:
+            return f"site:{d}"
+    return ""
+
+
+@lru_cache(maxsize=512)
+def _to_english(phrase: str) -> str:
+    """Translate a short scenario phrase to English via the GPT relay (luna).
+
+    Official-source docs (help centres, product tours) for our benchmark set are
+    English-first, but the scenario phrase comes from the project's language
+    (usually Chinese). We translate ONCE per phrase (cached) so help_docs /
+    interactive_demo query English pages effectively.
+
+    Best-effort: returns the phrase unchanged when it has no CJK, when no GPT key
+    is set, or on any failure — never blocks or crashes query building.
+    """
+    if not phrase or not _CJK_RE.search(phrase) or not settings.gpt_api_key:
+        return phrase
+    try:
+        import json
+        import urllib.request
+
+        prompt = (
+            "把下面的产品界面/场景短语翻译成简洁的英文检索词，"
+            "只返回英文，不要引号、不要解释、不要句号：\n" + phrase
+        )
+        body = json.dumps({
+            "model": settings.gpt_scorer_model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+        }).encode()
+        req = urllib.request.Request(
+            f"{settings.gpt_base_url}/chat/completions",
+            data=body,
+            headers={
+                "Authorization": f"Bearer {settings.gpt_api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            payload = json.load(resp)
+        out = (payload["choices"][0]["message"]["content"] or "").strip()
+        return out or phrase
+    except Exception as exc:  # never block query building
+        logger.warning("scenario translation failed for %r: %r", phrase, exc)
+        return phrase
+
+
 def expand_terms_for_cell(
     jtbd: str,
     journey_stage: str,
     page_state: str,
     lexicon_terms: list[str],
     competitor_names: list[str],
+    official_phrase: str | None = None,
+    competitor_domains: dict[str, tuple[str | None, str | None]] | None = None,
 ) -> QueryBundle:
     """Build a bucketed QueryBundle for one grid cell. Pure -- no DB access.
 
     The base phrase combines the cell's page_state and journey_stage keywords.
-    Lexicon terms (synonyms / UI vocabulary) and competitor names (canonical +
-    aliases) widen the surface, and intent/version modifiers steer toward
-    task-oriented and current results. Each bucket is deduplicated and capped
-    at MAX_PER_BUCKET for determinism.
-    """
-    # Base keywords: page_state + journey_stage form the semantic core; jtbd
-    # gives a fuller natural-language phrasing.
-    base = _dedup([page_state, journey_stage, jtbd])
-    # A single combined phrase used as a query seed across buckets.
-    base_phrase = " ".join(t for t in (page_state, journey_stage) if t).strip()
+    Competitor names (canonical + aliases) widen the surface, and intent/version
+    modifiers steer toward task-oriented and current results. Each bucket is
+    deduplicated and capped at MAX_PER_BUCKET for determinism.
 
-    lexicon = _dedup(lexicon_terms)
+    Official-source buckets (help_docs, interactive_demo) are treated differently
+    from third-party ones:
+      * ``official_phrase`` — an English rendering of the scenario, used INSTEAD of
+        the (usually Chinese) base_phrase for those buckets, because the benchmark
+        set's help centres / product tours are English-first. Falls back to
+        base_phrase when not supplied.
+      * ``competitor_domains`` — maps each competitor name (canonical AND every
+        alias) to its ``(help_center_domain, official_domain)``. When known, the
+        official buckets are ``site:``-anchored to the competitor's OWN domain, so
+        a search can only return that product's pages (not a rival's docs on the
+        same feature). Missing domains degrade gracefully to an un-anchored query.
+    """
+    # A single combined phrase used as a query seed across buckets.
+    base_phrase = _base_phrase(page_state, journey_stage)
+    # Official (help/demo) buckets query English pages; fall back to base_phrase.
+    off_phrase = (official_phrase or base_phrase).strip()
+
     competitors = _dedup(competitor_names)
     intents = _intent_terms()
     versions = _version_terms()
@@ -95,19 +206,28 @@ def expand_terms_for_cell(
     help_docs: list[str] = []
     if competitors:
         for name in competitors:
+            anchor = _site_anchor(competitor_domains, name, prefer="help")
+            # `site:notion.so/help {phrase} documentation` — anchored to the
+            # competitor's OWN docs domain so a rival's page can't be returned.
             for doc in _DOC_TERMS:
-                help_docs.append(f"{name} {base_phrase} {doc}")
-            help_docs.append(f"{name} {base_phrase} how to")
+                help_docs.append(
+                    f"{anchor} {name} {off_phrase} {doc}".strip()
+                )
+            help_docs.append(f"{anchor} {name} {off_phrase} how to".strip())
     else:
         for doc in _DOC_TERMS:
-            help_docs.append(f"{base_phrase} {doc}")
+            help_docs.append(f"{off_phrase} {doc}")
 
-    # interactive_demo: demo/tour phrasing, optionally prefixed by competitor.
+    # interactive_demo: demo/tour phrasing, prefixed by competitor and anchored to
+    # the competitor's own marketing site when known.
     interactive_demo: list[str] = []
     for demo_kind in ("interactive demo", "product tour"):
-        interactive_demo.append(f"{base_phrase} {demo_kind}")
+        interactive_demo.append(f"{off_phrase} {demo_kind}")
         for name in competitors:
-            interactive_demo.append(f"{name} {base_phrase} {demo_kind}")
+            anchor = _site_anchor(competitor_domains, name, prefer="official")
+            interactive_demo.append(
+                f"{anchor} {name} {off_phrase} {demo_kind}".strip()
+            )
 
     # video: video/walkthrough phrasing, optionally prefixed by competitor.
     video: list[str] = []
@@ -116,30 +236,36 @@ def expand_terms_for_cell(
         for name in competitors:
             video.append(f"{name} {base_phrase} {video_kind}")
 
-    # community: actively target real forums / knowledge communities — BOTH
-    # Chinese and international. Uses Google/Serper `(site:a OR site:b ...)`
-    # grouping so ONE search covers many sites, staying within the per-probe
-    # search budget (a per-site query would blow past MAX_PER_BUCKET and the
-    # search cap, so most sites would never actually run).
-    #   CN: 知乎 / 少数派 / CSDN / 掘金 / V2EX / 小红书
-    #   EN: reddit(old.) / stackoverflow / stackexchange / producthunt / HN
-    _CN_GROUP = "(site:zhihu.com OR site:sspai.com OR site:csdn.net OR site:juejin.cn OR site:v2ex.com OR site:xiaohongshu.com)"
-    _EN_GROUP = "(site:old.reddit.com OR site:stackoverflow.com OR site:stackexchange.com OR site:producthunt.com OR site:news.ycombinator.com)"
+    # community: real user voice from forums / knowledge communities.
+    #
+    # We DO NOT `site:`-anchor here. Serper free accounts reject the
+    # `(site:a OR site:b ...)` grouping we'd need to cover many sites in one query
+    # (HTTP 400 "Query pattern not allowed for free accounts"), and a per-site
+    # query would blow past the search budget. Instead we use plain
+    # community-signal keywords — a mix of CN and EN forum-voice terms — and let
+    # Google surface reddit / 知乎 / stackoverflow etc. naturally. Those domains
+    # are explicitly NOT in the junk filter, so their results survive downstream.
+    _CN_COMMUNITY_TERMS = "使用体验 评价 讨论 吐槽"
+    _EN_COMMUNITY_TERMS = "review discussion reddit forum"
     community: list[str] = []
     for name in competitors:
-        community.append(f"{name} {base_phrase} {_CN_GROUP}")   # 中文社群一网打尽
-        community.append(f"{name} {base_phrase} {_EN_GROUP}")   # 国外社群一网打尽
-        community.append(f"{name} {base_phrase} 使用体验 评价")  # 兜底：不限站点
+        community.append(f"{name} {base_phrase} {_CN_COMMUNITY_TERMS}")  # 中文社群声音
+        community.append(f"{name} {base_phrase} {_EN_COMMUNITY_TERMS}")  # 国外社群声音
     if not competitors:
-        community.append(f"{base_phrase} {_CN_GROUP}")
-        community.append(f"{base_phrase} {_EN_GROUP}")
+        community.append(f"{base_phrase} {_CN_COMMUNITY_TERMS}")
+        community.append(f"{base_phrase} {_EN_COMMUNITY_TERMS}")
 
-    # generic: base terms crossed with intent and version modifiers.
-    generic: list[str] = [*base, *lexicon]
-    for intent in intents:
-        generic.append(f"{base_phrase} {intent}")
-    for version in versions:
-        generic.append(f"{base_phrase} {version}")
+    # generic: product + translated scenario + search intent. Raw cell labels are
+    # internal taxonomy, not useful search terms, and caused unrelated results.
+    generic: list[str] = []
+    for name in competitors:
+        for intent in intents:
+            generic.append(f"{name} {off_phrase} {intent}")
+        for version in versions:
+            generic.append(f"{name} {off_phrase} {version}")
+    if not competitors:
+        for intent in intents:
+            generic.append(f"{off_phrase} {intent}")
 
     return QueryBundle(
         help_docs=_cap(help_docs),
@@ -182,12 +308,26 @@ def build_query_bundle(
     else:
         comp_query = comp_query.where(CompetitorEntity.status == "confirmed")
 
+    # Collect names AND a name→(help_center_domain, official_domain) map so the
+    # official buckets can `site:`-anchor to each competitor's own domain. Every
+    # alias shares the parent's domains (downstream iterates the flat name list,
+    # so aliases must resolve too).
     competitor_names: list[str] = []
+    competitor_domains: dict[str, tuple[str | None, str | None]] = {}
     for comp in db.execute(comp_query).scalars().all():
+        pair = (comp.help_center_domain, comp.official_domain)
         if comp.canonical_name:
             competitor_names.append(comp.canonical_name)
+            competitor_domains[comp.canonical_name] = pair
         if comp.aliases:
-            competitor_names.extend(a for a in comp.aliases if a)
+            for a in comp.aliases:
+                if a:
+                    competitor_names.append(a)
+                    competitor_domains[a] = pair
+
+    # Official-source buckets query English pages (help centres / product tours in
+    # our benchmark set are English-first), so translate the scenario phrase once.
+    official_phrase = _to_english(_base_phrase(cell.page_state, cell.journey_stage))
 
     return expand_terms_for_cell(
         jtbd=cell.jtbd,
@@ -195,4 +335,6 @@ def build_query_bundle(
         page_state=cell.page_state,
         lexicon_terms=lexicon_terms,
         competitor_names=competitor_names,
+        official_phrase=official_phrase,
+        competitor_domains=competitor_domains,
     )
