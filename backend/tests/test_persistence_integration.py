@@ -56,16 +56,24 @@ def _seed_cell_and_competitor(db):
     """Insert the FK parents (grid_cell + competitor) this test needs."""
     from app.models.m1_grid import GridCell
     from app.models.m0_registry import CompetitorEntity
+    from app.models.project import Project
 
     suffix = uuid.uuid4().hex[:8]
+    project = Project(name=f"Persistence test {suffix}")
+    db.add(project)
+    db.flush()
     cell = GridCell(
+        project_id=project.id,
         cell_key=f"test.persist.{suffix}",
         jtbd="invite + permissions",
         journey_stage="first-setup",
         page_state="role-select",
         value_score=0.9,
     )
-    comp = CompetitorEntity(canonical_name=f"TestCo-{suffix}")
+    comp = CompetitorEntity(
+        project_id=project.id,
+        canonical_name=f"TestCo-{suffix}",
+    )
     db.add(cell)
     db.add(comp)
     db.commit()
