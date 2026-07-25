@@ -15,6 +15,7 @@ exists downstream.
 """
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.m3_collection import Asset
@@ -143,3 +144,15 @@ def recompute_coverage(
     db.commit()
     db.refresh(snapshot)
     return snapshot
+
+
+def recompute_project_coverage(db: Session, project_id: UUID) -> int:
+    """Recompute every distinct cell/competitor coverage pair in one project."""
+    pairs = db.execute(
+        select(Asset.cell_id, Asset.competitor_id)
+        .where(Asset.project_id == project_id)
+        .distinct()
+    ).all()
+    for cell_id, competitor_id in pairs:
+        recompute_coverage(db, cell_id, competitor_id)
+    return len(pairs)

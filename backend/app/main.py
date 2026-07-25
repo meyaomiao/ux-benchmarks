@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from app.api import admin
 from app.api.v1.router import api_router
 from app.core.errors import register_exception_handlers
 
@@ -21,6 +23,7 @@ app.add_middleware(
 
 register_exception_handlers(app)
 app.include_router(api_router)
+app.include_router(admin.router)
 
 
 @app.get("/healthz", tags=["Health"])
