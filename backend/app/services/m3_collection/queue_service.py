@@ -23,11 +23,13 @@ def enqueue_cell(
     """Queue a (cell x competitor) pair for (re)probing.
 
     OPTION A (confirmed product decision — see issue #14 comment):
-    a SATURATED snapshot cannot go straight to QUEUED per the state machine
-    (SATURATED -> STALE -> QUEUED). When a user forces re-collection with a
-    MANUAL_PIN, we do not want them to have to invalidate freshness first.
-    So for trigger == MANUAL_PIN on a SATURATED snapshot we auto-route the two
-    transitions (SATURATED -> STALE -> QUEUED) so one user action suffices.
+    some states cannot go straight to QUEUED per the state machine. When a user
+    forces re-collection with a MANUAL_PIN, we do not want them to have to
+    perform an intermediate step first. So we auto-route the legal two-hop path
+    for the specific MANUAL_PIN states that need it:
+
+      - SATURATED -> STALE -> QUEUED
+      - SHORTLIST_READY -> PARTIAL -> QUEUED
 
     For all other eligible states we delegate to coverage_state_service.enqueue,
     which is a no-op (returns as-is) when the snapshot is already QUEUED/PROBING.
@@ -50,11 +52,24 @@ def enqueue_cell(
             db, cell_id, competitor_id, CellState.QUEUED, note=trigger
         )
 
+    if (
+        trigger == Trigger.MANUAL_PIN
+        and snapshot.status == CellState.SHORTLIST_READY
+    ):
+        transition_state(
+            db, cell_id, competitor_id, CellState.PARTIAL, note=trigger
+        )
+        return transition_state(
+            db, cell_id, competitor_id, CellState.QUEUED, note=trigger
+        )
+
     # All other eligible states: normal enqueue (no-op if not eligible).
     return enqueue(db, cell_id, competitor_id, trigger)
 
 
-def list_queued(db: Session, limit: int = 50, project_id: UUID | None = None) -> list[CoverageSnapshot]:
+def list_queued(
+    db: Session, limit: int = 50, project_id: UUID | None = None
+) -> list[CoverageSnapshot]:
     """Return QUEUED snapshots, oldest-probed first, scoped to a project.
 
     Actual priority ordering (see priority.py) is computed by the caller/worker
