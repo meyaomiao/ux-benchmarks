@@ -20,6 +20,8 @@ from __future__ import annotations
 import logging
 from functools import lru_cache
 
+from billiard.exceptions import SoftTimeLimitExceeded
+
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -91,6 +93,8 @@ def abstract_interaction_pattern(
         # A relay that ignores the word budget would produce a query that matches
         # nothing, so clip rather than trust.
         return " ".join(out.split()[:_MAX_WORDS])
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:  # never block a probe
         logger.warning(
             "interaction-pattern abstraction failed for %r/%r: %r",

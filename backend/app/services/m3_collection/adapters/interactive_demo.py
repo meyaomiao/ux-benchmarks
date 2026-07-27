@@ -50,6 +50,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 from uuid import UUID
 
+from billiard.exceptions import SoftTimeLimitExceeded
+
 from app.core.config import settings
 from app.services.m3_collection.contracts import Candidate, EvidenceType, SourceType
 
@@ -86,6 +88,27 @@ _STEP_WAIT_S = 0.8
 # Page-load budget. 8s dropped slow-but-valid vendor sites (docusign.com,
 # power.law) before they ever rendered, so their screenshots never existed.
 _GOTO_TIMEOUT_MS = 25_000
+
+# Every Playwright operation that supports a timeout inherits this bound. It
+# covers selectors, clicks, screenshots, evaluation and title reads after the
+# separately bounded navigation completes.
+_ACTION_TIMEOUT_MS = 5_000
+_BROWSER_LAUNCH_TIMEOUT_MS = 15_000
+
+
+def _configure_page_timeouts(page) -> None:
+    page.set_default_timeout(_ACTION_TIMEOUT_MS)
+    page.set_default_navigation_timeout(_GOTO_TIMEOUT_MS)
+
+
+def _close_playwright_resource(resource, label: str) -> None:
+    """Best-effort close that still lets Celery soft timeouts propagate."""
+    try:
+        resource.close()
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("failed to close Playwright %s: %s", label, exc)
 
 
 def _detect_platform(src: str) -> str | None:
@@ -249,13 +272,15 @@ class InteractiveDemoAdapter:
         candidates: list[Candidate] = []
 
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
+            browser = pw.chromium.launch(
+                headless=True, timeout=_BROWSER_LAUNCH_TIMEOUT_MS
+            )
             try:
                 candidates = self._collect_from_pages(
                     browser, cell_id, competitor_id, queries, frame_dir, limit
                 )
             finally:
-                browser.close()
+                _close_playwright_resource(browser, "browser")
 
         return candidates
 
@@ -284,6 +309,8 @@ class InteractiveDemoAdapter:
                     max_frames=limit - len(candidates),
                 )
                 candidates.extend(new)
+            except SoftTimeLimitExceeded:
+                raise
             except Exception as exc:  # noqa: BLE001 - page-level error
                 logger.warning("interactive_demo scrape failed for %s: %s", url, exc)
 
@@ -305,6 +332,7 @@ class InteractiveDemoAdapter:
         from feature pages, help docs with embedded images, etc.
         """
         page = browser.new_page()
+        _configure_page_timeouts(page)
         candidates: list[Candidate] = []
         try:
             page.goto(page_url, wait_until="domcontentloaded", timeout=_GOTO_TIMEOUT_MS)
@@ -338,7 +366,7 @@ class InteractiveDemoAdapter:
                     )
                 )
         finally:
-            page.close()
+            _close_playwright_resource(page, "page")
 
         return candidates
 
@@ -372,6 +400,8 @@ class InteractiveDemoAdapter:
                     }
                     return document.body.innerText.slice(0, 800);
                 }""") or ""
+            except SoftTimeLimitExceeded:
+                raise
             except Exception:
                 pass
 
@@ -390,6 +420,8 @@ class InteractiveDemoAdapter:
                     evidence_type_hint=EvidenceType.OBSERVED,
                 )
             ]
+        except SoftTimeLimitExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.warning("page fallback screenshot failed for %s: %s", page_url, exc)
             return []
@@ -425,6 +457,8 @@ class InteractiveDemoAdapter:
                         "width": bbox["width"], "height": bbox["height"],
                     },
                 )
+            except SoftTimeLimitExceeded:
+                raise
             except Exception as exc:  # noqa: BLE001 - screenshot error
                 logger.warning("screenshot failed at step %d: %s", step, exc)
                 break
@@ -471,6 +505,8 @@ class InteractiveDemoAdapter:
                     if btn:
                         btn.click()
                         return True
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:  # noqa: BLE001
             pass
 
@@ -478,6 +514,8 @@ class InteractiveDemoAdapter:
         try:
             page.keyboard.press("ArrowRight")
             return True
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:  # noqa: BLE001
             pass
 
@@ -523,6 +561,8 @@ def _dismiss_consent(page) -> None:
             if btn is not None and btn.is_visible():
                 btn.click(timeout=1_000)
                 return
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:  # noqa: BLE001 — overlay handling is opportunistic
             continue
 
@@ -551,12 +591,15 @@ def capture_page_screenshots(urls: list[str]) -> dict[str, str]:
 
     out: dict[str, str] = {}
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        browser = pw.chromium.launch(
+            headless=True, timeout=_BROWSER_LAUNCH_TIMEOUT_MS
+        )
         try:
             for url in urls:
                 if not _looks_like_url(url):
                     continue
                 page = browser.new_page(viewport=_RESCORE_VIEWPORT)
+                _configure_page_timeouts(page)
                 try:
                     page.goto(
                         url, wait_until="domcontentloaded", timeout=_GOTO_TIMEOUT_MS
@@ -568,6 +611,8 @@ def capture_page_screenshots(urls: list[str]) -> dict[str, str]:
                         page.wait_for_load_state(
                             "networkidle", timeout=_SETTLE_TIMEOUT_MS
                         )
+                    except SoftTimeLimitExceeded:
+                        raise
                     except Exception:  # noqa: BLE001 — a busy page is fine
                         page.wait_for_timeout(_SETTLE_TIMEOUT_MS)
                     fpath = shot_dir / f"{uuid4().hex[:8]}_rescore.png"
@@ -581,10 +626,12 @@ def capture_page_screenshots(urls: list[str]) -> dict[str, str]:
                         logger.info("rescore screenshot too empty for %s", url)
                         continue
                     out[url] = str(fpath)
+                except SoftTimeLimitExceeded:
+                    raise
                 except Exception as exc:  # noqa: BLE001 — per-URL, keep going
                     logger.warning("rescore screenshot failed for %s: %s", url, exc)
                 finally:
-                    page.close()
+                    _close_playwright_resource(page, "page")
         finally:
-            browser.close()
+            _close_playwright_resource(browser, "browser")
     return out

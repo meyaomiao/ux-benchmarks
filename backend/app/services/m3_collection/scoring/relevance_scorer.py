@@ -31,6 +31,8 @@ import logging
 import re
 from typing import Optional
 
+from billiard.exceptions import SoftTimeLimitExceeded
+
 from app.core.config import settings
 from app.services.m3_collection.contracts import (
     Candidate,
@@ -251,6 +253,8 @@ class RelevanceScorer:
                     product_name=product_name,
                 )
                 scored_by = f"gpt:{settings.gpt_vision_model if img else settings.gpt_scorer_model}"
+            except SoftTimeLimitExceeded:
+                raise
             except Exception as exc:  # never crash the pipeline
                 logger.warning(
                     "GPT relevance scoring failed for candidate %s, "

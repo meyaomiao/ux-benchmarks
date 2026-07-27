@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from uuid import UUID
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -143,6 +144,8 @@ def run_probe_pipeline(
         try:
             found = adp.fetch(cell_id, competitor_id, queries, limit=per_bucket_limit)
             all_candidates.extend(found)
+        except SoftTimeLimitExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001 — one failing adapter doesn't kill others
             import logging
             logging.getLogger(__name__).warning(
@@ -173,6 +176,8 @@ def run_probe_pipeline(
             ).scalar_one_or_none()
             product_name = (_comp.canonical_name if _comp else "") or ""
             competitor_type = (_comp.competitor_type if _comp else "") or ""
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:  # noqa: BLE001 — context lookup must never kill a probe
             product_name = ""
             competitor_type = ""
@@ -202,6 +207,8 @@ def run_probe_pipeline(
                     # removed.
                     inclusion = ""
                     exclusion = ""
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:  # noqa: BLE001 — abstraction must never kill a probe
             pass
 
@@ -284,6 +291,8 @@ def _rescore_near_threshold(
 
     try:
         shots = capture_page_screenshots([c.source_url for c in near_misses])
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:  # noqa: BLE001 — rescore is an upgrade, not a duty
         import logging
         logging.getLogger(__name__).warning("near-threshold capture failed: %s", exc)

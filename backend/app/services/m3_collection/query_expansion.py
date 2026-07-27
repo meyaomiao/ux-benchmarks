@@ -15,6 +15,7 @@ import re
 from functools import lru_cache
 from uuid import UUID
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -157,6 +158,8 @@ def _to_english(phrase: str) -> str:
             payload = json.load(resp)
         out = (payload["choices"][0]["message"]["content"] or "").strip()
         return out or phrase
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:  # never block query building
         logger.warning("scenario translation failed for %r: %r", phrase, exc)
         return phrase
