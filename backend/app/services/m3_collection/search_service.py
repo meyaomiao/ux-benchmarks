@@ -246,6 +246,7 @@ def resolve_queries_to_urls(
     *,
     max_total: int = _MAX_URLS_TOTAL,
     max_searches: int = _MAX_SEARCHES_PER_PROBE,
+    allow_unanchored_fallback: bool = True,
 ) -> list[str]:
     """Resolve a list of query strings into a deduplicated URL list.
 
@@ -255,6 +256,13 @@ def resolve_queries_to_urls(
     can't fan out into a dozen slow searches. When a leading ``site:`` query
     returns no URLs, its unanchored equivalent is retried once within the same
     search budget. Total URLs capped at max_total.
+
+    ``allow_unanchored_fallback=False`` disables that retry. Official buckets
+    (help_docs / interactive_demo) MUST stay on the competitor's own domain: the
+    scorer hard-fails them below ``PRODUCT_MATCH_GATE``, so an unanchored result
+    can never pass and only burns the screenshot/scoring budget on some other
+    vendor's page. Third-party buckets keep the retry — they are supposed to
+    range across the open web.
     """
     seen: set[str] = set()
     urls: list[str] = []
@@ -279,7 +287,8 @@ def resolve_queries_to_urls(
             found_urls = search_urls(query, n=result_limit)
             fallback_query = _SITE_PREFIX_RE.sub("", query, count=1).strip()
             if (
-                not found_urls
+                allow_unanchored_fallback
+                and not found_urls
                 and fallback_query
                 and fallback_query != query.strip()
                 and searches_done < max_searches

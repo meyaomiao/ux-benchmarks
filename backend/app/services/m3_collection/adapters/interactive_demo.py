@@ -83,6 +83,10 @@ _NEXT_SELECTORS = [
 # How long (seconds) to wait after a step advance before screenshotting.
 _STEP_WAIT_S = 0.8
 
+# Page-load budget. 8s dropped slow-but-valid vendor sites (docusign.com,
+# power.law) before they ever rendered, so their screenshots never existed.
+_GOTO_TIMEOUT_MS = 25_000
+
 
 def _detect_platform(src: str) -> str | None:
     """Return the platform name if `src` matches a known signature, else None."""
@@ -303,7 +307,7 @@ class InteractiveDemoAdapter:
         page = browser.new_page()
         candidates: list[Candidate] = []
         try:
-            page.goto(page_url, wait_until="domcontentloaded", timeout=8_000)
+            page.goto(page_url, wait_until="domcontentloaded", timeout=_GOTO_TIMEOUT_MS)
 
             # Find iframes with known demo-platform src signatures.
             iframe_elements = page.query_selector_all("iframe")
@@ -478,3 +482,59 @@ class InteractiveDemoAdapter:
             pass
 
         return False
+
+
+# ---------------------------------------------------------------------------
+# Standalone viewport capture (used by the pipeline's near-threshold rescore).
+#
+# A text candidate that already reads as the RIGHT product but has no image is
+# capped on fidelity/evidence_directness and dies just under the floor. This
+# gives the pipeline a way to screenshot such a URL and re-score it in image
+# mode, without routing it through the interactive_demo bucket (which would
+# change its source_type and subject it to the official-source product gate).
+# ---------------------------------------------------------------------------
+
+def capture_page_screenshots(urls: list[str]) -> dict[str, str]:
+    """Screenshot each URL's viewport. Returns {url: png_path} for successes.
+
+    Best-effort: a URL that fails to load or shoot is simply absent from the
+    result. Never raises — a failed capture must leave the original text-mode
+    score standing, not break the probe.
+    """
+    if not urls:
+        return {}
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        logger.error(
+            "Playwright not installed. Run: playwright install chromium --with-deps"
+        )
+        return {}
+
+    from uuid import uuid4
+
+    shot_dir = Path(settings.assets_dir) / "rescore_frames"
+    shot_dir.mkdir(parents=True, exist_ok=True)
+
+    out: dict[str, str] = {}
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        try:
+            for url in urls:
+                if not _looks_like_url(url):
+                    continue
+                page = browser.new_page()
+                try:
+                    page.goto(
+                        url, wait_until="domcontentloaded", timeout=_GOTO_TIMEOUT_MS
+                    )
+                    fpath = shot_dir / f"{uuid4().hex[:8]}_rescore.png"
+                    page.screenshot(path=str(fpath), full_page=False)
+                    out[url] = str(fpath)
+                except Exception as exc:  # noqa: BLE001 — per-URL, keep going
+                    logger.warning("rescore screenshot failed for %s: %s", url, exc)
+                finally:
+                    page.close()
+        finally:
+            browser.close()
+    return out

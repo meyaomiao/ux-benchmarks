@@ -48,3 +48,27 @@ def test_site_query_does_not_fallback_when_results_exist(monkeypatch):
 
     assert result == expected
     assert calls == [anchored]
+
+
+def test_official_bucket_query_does_not_fall_back_unanchored(monkeypatch):
+    """Official buckets stay on the competitor's own domain.
+
+    The scorer hard-fails help_docs / interactive_demo below PRODUCT_MATCH_GATE,
+    so an unanchored retry can only return pages that cannot pass — it just burns
+    the screenshot + vision budget on some other vendor's site.
+    """
+    anchored = "site:adobe.com Adobe Acrobat contract risk scan product tour"
+    calls: list[str] = []
+
+    def fake_search(query: str, n: int) -> list[str]:
+        calls.append(query)
+        return []
+
+    monkeypatch.setattr(search_service, "search_urls", fake_search)
+
+    result = search_service.resolve_queries_to_urls(
+        [anchored], max_total=3, max_searches=3, allow_unanchored_fallback=False
+    )
+
+    assert result == []
+    assert calls == [anchored]  # no unanchored retry
