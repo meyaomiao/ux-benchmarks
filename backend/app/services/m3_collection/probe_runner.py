@@ -21,11 +21,14 @@ from app.services.m3_collection.coverage_recompute import (
     recompute_coverage,
 )
 from app.services.m3_collection.coverage_state_service import (
-    get_or_create_snapshot,
     transition_state,
 )
-from app.services.m3_collection.queue_service import enqueue_cell
 from app.services.m3_collection.pipeline import run_probe_pipeline
+from app.services.m3_collection.probe_observability import (
+    ProbeTelemetry,
+    log_probe_run,
+)
+from app.services.m3_collection.queue_service import enqueue_cell
 from app.services.m3_collection.score_log import log_scored_candidates
 from app.services.m3_collection.state_machine import CellState, Trigger
 
@@ -61,25 +64,52 @@ def run_probe(db: Session, cell_id: UUID, competitor_id: UUID) -> dict:
     probing = transition_state(
         db, str(cid), str(kid), CellState.PROBING, note="probe-cycle"
     )
+    telemetry = ProbeTelemetry()
 
     # A probe must ALWAYS reach a terminal state, even if the pipeline throws.
     # Recover the state first, then preserve the failure for Celery/API callers.
     try:
-        result = run_probe_pipeline(db, cid, kid)
+        result = run_probe_pipeline(db, cid, kid, telemetry=telemetry)
     except SoftTimeLimitExceeded:
-        transition_state(
+        snapshot = transition_state(
             db,
             str(cid),
             str(kid),
             CellState.REJECTED_EMPTY,
             note="probe-cycle: soft time limit exceeded",
         )
+        log_probe_run(
+            db,
+            cid,
+            kid,
+            telemetry,
+            probe_cycle=probing.probe_cycles,
+            outcome="soft_timeout",
+            final_state=snapshot.status,
+            candidates_found=telemetry.candidates_found,
+            scored_count=telemetry.scored_count,
+            passed_count=telemetry.passed_count,
+            error_type="SoftTimeLimitExceeded",
+        )
         raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("probe pipeline failed for %s/%s: %s", cid, kid, exc)
-        transition_state(
+        snapshot = transition_state(
             db, str(cid), str(kid), CellState.REJECTED_EMPTY,
             note=f"probe-cycle: pipeline error: {str(exc)[:120]}",
+        )
+        log_probe_run(
+            db,
+            cid,
+            kid,
+            telemetry,
+            probe_cycle=probing.probe_cycles,
+            outcome="failed",
+            final_state=snapshot.status,
+            candidates_found=telemetry.candidates_found,
+            scored_count=telemetry.scored_count,
+            passed_count=telemetry.passed_count,
+            error_type=type(exc).__name__,
         )
         raise
 
@@ -104,6 +134,20 @@ def run_probe(db: Session, cell_id: UUID, competitor_id: UUID) -> dict:
             )
         persisted = 0
 
+    run_log = log_probe_run(
+        db,
+        cid,
+        kid,
+        telemetry,
+        probe_cycle=probing.probe_cycles,
+        outcome="completed",
+        final_state=snapshot.status,
+        candidates_found=result.candidates_found,
+        scored_count=len(result.scored),
+        passed_count=len(result.passed),
+        persisted_count=persisted,
+    )
+
     return {
         "cell_id": str(cid),
         "competitor_id": str(kid),
@@ -113,4 +157,6 @@ def run_probe(db: Session, cell_id: UUID, competitor_id: UUID) -> dict:
         "passed": len(result.passed),
         "persisted": persisted,
         "agentic_stats": result.agentic_stats,
+        "run_id": str(run_log.id) if run_log is not None else None,
+        "run_stats": telemetry.summary(),
     }

@@ -5,18 +5,32 @@ from celery.exceptions import (
     BackendError,
     OperationalError,
     TimeLimitExceeded,
-    TimeoutError as CeleryTimeoutError,
 )
+from celery.exceptions import TimeoutError as CeleryTimeoutError
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_project_id
 from app.core.errors import AppError
+from app.models.m0_registry import CompetitorEntity
+from app.models.m1_grid import GridCell
 from app.schemas.m3 import (
-    QueueItemRead, QueueListResponse, PinRequest,
-    QueryBundle, SourceRegistryListResponse,
+    PinRequest,
+    ProbeRunListResponse,
+    ProbeRunSummary,
+    QueryBundle,
+    QueueItemRead,
+    QueueListResponse,
+    SourceRegistryListResponse,
 )
+from app.services.m3_collection import source_registry_service
+from app.services.m3_collection.probe_observability import (
+    list_probe_runs,
+    summarize_probe_runs,
+)
+from app.services.m3_collection.query_expansion import build_query_bundle
 from app.services.m3_collection.queue_service import (
     count_queued,
     enqueue_cell,
@@ -24,14 +38,9 @@ from app.services.m3_collection.queue_service import (
     reclaim_stuck_probing,
     stop_queued,
 )
-from app.services.m3_collection.query_expansion import build_query_bundle
-from app.services.m3_collection import source_registry_service
-from app.services.m3_collection.state_machine import CellState, Trigger
 from app.services.m3_collection.screenshot_service import capture_url
+from app.services.m3_collection.state_machine import CellState, Trigger
 from app.workers.tasks.probe_cycle import PROBE_HARD_TIME_LIMIT, run_probe_cycle
-from app.models.m1_grid import GridCell
-from app.models.m0_registry import CompetitorEntity
-from sqlalchemy import select
 
 router = APIRouter(prefix="/m3", tags=["M3 · Collection Engine"])
 logger = logging.getLogger(__name__)
@@ -99,6 +108,44 @@ async def list_source_registry(
         items=items, total=total, limit=limit, offset=offset,
         has_next=offset + limit < total,
     )
+
+
+# --- Probe observability (#88) ---------------------------------------------
+
+@router.get("/probe-runs", response_model=ProbeRunListResponse)
+def get_probe_runs(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    cell_id: UUID | None = None,
+    competitor_id: UUID | None = None,
+    strategy_version: str | None = None,
+    db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
+):
+    items, total = list_probe_runs(
+        db,
+        project_id,
+        limit=limit,
+        offset=offset,
+        cell_id=cell_id,
+        competitor_id=competitor_id,
+        strategy_version=strategy_version,
+    )
+    return ProbeRunListResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+        has_next=offset + limit < total,
+    )
+
+
+@router.get("/probe-runs/summary", response_model=list[ProbeRunSummary])
+def get_probe_run_summary(
+    db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
+):
+    return summarize_probe_runs(db, project_id)
 
 
 # --- Manual screenshot (#30) ------------------------------------------------

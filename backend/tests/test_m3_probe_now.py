@@ -36,6 +36,8 @@ def _payload(cell_id, competitor_id):
         "passed": 1,
         "persisted": 1,
         "agentic_stats": {"pages_opened": 2},
+        "run_id": str(uuid4()),
+        "run_stats": {"search_calls": 4, "scoring_calls": 3},
     }
 
 

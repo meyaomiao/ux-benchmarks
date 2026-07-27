@@ -5,6 +5,7 @@ from __future__ import annotations
 import socket
 import sys
 import types
+from itertools import count
 from pathlib import Path
 
 import pytest
@@ -599,9 +600,11 @@ def test_page_and_screenshot_failures_degrade_to_empty(monkeypatch, tmp_path):
 
 def test_soft_time_limit_propagates_after_all_browser_resources_close(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "assets_dir", tmp_path)
+    clock = count(start=100, step=1)
+    monkeypatch.setattr(agentic_site.time, "monotonic", lambda: next(clock))
     browser = _install_browser(monkeypatch, {"https://example.com/": {}})
 
-    with pytest.raises(SoftTimeLimitExceeded):
+    with pytest.raises(SoftTimeLimitExceeded) as exc_info:
         explore_competitor_site(
             competitor_name="Acme",
             intent="permissions",
@@ -611,6 +614,11 @@ def test_soft_time_limit_propagates_after_all_browser_resources_close(monkeypatc
         )
 
     assert browser.page.closed and browser.context.closed and browser.closed
+    assert exc_info.value.agentic_stats["pages_opened"] == 1
+    assert exc_info.value.agentic_stats["model_calls"] == 1
+    assert exc_info.value.agentic_stats["stop_reason"] == "soft_time_limit"
+    assert exc_info.value.agentic_stats["duration_ms"] > 0
+    assert exc_info.value.agentic_trace == ()
 
 
 def test_expired_total_budget_stops_before_navigation(monkeypatch, tmp_path):

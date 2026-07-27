@@ -173,6 +173,9 @@ class InteractiveDemoAdapter:
 
     source_type: SourceType = SourceType.INTERACTIVE_DEMO
 
+    def __init__(self) -> None:
+        self.last_stats = {"browser_pages": 0, "candidates_found": 0}
+
     def fetch(
         self,
         cell_id: UUID,
@@ -182,9 +185,13 @@ class InteractiveDemoAdapter:
         limit: int = 10,
     ) -> list[Candidate]:
         """Return up to `limit` demo-frame Candidates for this (cell, competitor)."""
+        self.last_stats = {"browser_pages": 0, "candidates_found": 0}
         if settings.use_collection_mock:
-            return self._mock_fetch(cell_id, competitor_id, queries, limit=limit)
-        return self._live_fetch(cell_id, competitor_id, queries, limit=limit)
+            candidates = self._mock_fetch(cell_id, competitor_id, queries, limit=limit)
+        else:
+            candidates = self._live_fetch(cell_id, competitor_id, queries, limit=limit)
+        self.last_stats["candidates_found"] = len(candidates)
+        return candidates
 
     # ------------------------------------------------------------------
     # Mock path
@@ -303,6 +310,7 @@ class InteractiveDemoAdapter:
                 continue
 
             url = query.strip()
+            self.last_stats["browser_pages"] += 1
             try:
                 new = self._scrape_page(
                     browser, url, cell_id, competitor_id, frame_dir,

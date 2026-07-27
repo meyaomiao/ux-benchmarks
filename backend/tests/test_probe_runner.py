@@ -44,6 +44,11 @@ def _wire(monkeypatch, *, result: ProbeResult, live_evidence: bool):
     monkeypatch.setattr(
         probe_runner, "log_scored_candidates", lambda *_args, **_kwargs: 0
     )
+    monkeypatch.setattr(
+        probe_runner,
+        "log_probe_run",
+        lambda *_args, **_kwargs: SimpleNamespace(id=uuid4()),
+    )
     return transitions
 
 
@@ -115,6 +120,45 @@ def test_every_scored_candidate_is_logged_with_the_probe_cycle(monkeypatch):
     assert logged == [(scored, 2)]
 
 
+def test_completed_probe_logs_run_counts_and_returns_same_summary(monkeypatch):
+    cell_id, competitor_id = uuid4(), uuid4()
+    scored = [("cand-a", "score-a"), ("cand-b", "score-b")]
+    result = ProbeResult(
+        cell_id=cell_id,
+        competitor_id=competitor_id,
+        candidates_found=2,
+        scored=scored,
+        passed=[scored[0]],
+    )
+    _wire(monkeypatch, result=result, live_evidence=True)
+    monkeypatch.setattr(probe_runner, "persist_passing", lambda *_args: [object()])
+    calls = []
+
+    def capture(_db, _cid, _kid, telemetry, **kwargs):
+        telemetry.scoring_calls = 2
+        telemetry.finish()
+        calls.append(kwargs)
+        return SimpleNamespace(id=uuid4())
+
+    monkeypatch.setattr(probe_runner, "log_probe_run", capture)
+
+    out = probe_runner.run_probe(object(), cell_id, competitor_id)
+
+    assert calls == [
+        {
+            "probe_cycle": 2,
+            "outcome": "completed",
+            "final_state": CellState.SHORTLIST_READY,
+            "candidates_found": 2,
+            "scored_count": 2,
+            "passed_count": 1,
+            "persisted_count": 1,
+        }
+    ]
+    assert out["run_id"]
+    assert out["run_stats"]["scoring_calls"] == 2
+
+
 def test_pipeline_failure_lands_on_rejected_empty_and_propagates(monkeypatch):
     cell_id, competitor_id = uuid4(), uuid4()
     transitions = _wire(
@@ -123,7 +167,11 @@ def test_pipeline_failure_lands_on_rejected_empty_and_propagates(monkeypatch):
         live_evidence=True,
     )
 
-    def boom(*_args, **_kwargs):
+    def boom(*_args, **kwargs):
+        telemetry = kwargs["telemetry"]
+        telemetry.candidates_found = 5
+        telemetry.scored_count = 2
+        telemetry.passed_count = 1
         raise RuntimeError("ssl handshake failed")
 
     monkeypatch.setattr(probe_runner, "run_probe_pipeline", boom)
@@ -132,11 +180,22 @@ def test_pipeline_failure_lands_on_rejected_empty_and_propagates(monkeypatch):
         "log_scored_candidates",
         lambda *_args, **_kwargs: pytest.fail("nothing was scored"),
     )
+    run_logs = []
+    monkeypatch.setattr(
+        probe_runner,
+        "log_probe_run",
+        lambda *_args, **kwargs: run_logs.append(kwargs),
+    )
 
     with pytest.raises(RuntimeError, match="ssl handshake failed"):
         probe_runner.run_probe(object(), cell_id, competitor_id)
 
     assert transitions == [CellState.PROBING, CellState.REJECTED_EMPTY]
+    assert run_logs[0]["outcome"] == "failed"
+    assert run_logs[0]["candidates_found"] == 5
+    assert run_logs[0]["scored_count"] == 2
+    assert run_logs[0]["passed_count"] == 1
+    assert run_logs[0]["error_type"] == "RuntimeError"
 
 
 def test_soft_timeout_lands_on_rejected_empty_and_propagates(monkeypatch):
@@ -147,15 +206,29 @@ def test_soft_timeout_lands_on_rejected_empty_and_propagates(monkeypatch):
         live_evidence=True,
     )
 
-    def timeout(*_args, **_kwargs):
+    def timeout(*_args, **kwargs):
+        telemetry = kwargs["telemetry"]
+        telemetry.candidates_found = 4
+        telemetry.scored_count = 1
         raise SoftTimeLimitExceeded()
 
     monkeypatch.setattr(probe_runner, "run_probe_pipeline", timeout)
+    run_logs = []
+    monkeypatch.setattr(
+        probe_runner,
+        "log_probe_run",
+        lambda *_args, **kwargs: run_logs.append(kwargs),
+    )
 
     with pytest.raises(SoftTimeLimitExceeded):
         probe_runner.run_probe(object(), cell_id, competitor_id)
 
     assert transitions == [CellState.PROBING, CellState.REJECTED_EMPTY]
+    assert run_logs[0]["outcome"] == "soft_timeout"
+    assert run_logs[0]["candidates_found"] == 4
+    assert run_logs[0]["scored_count"] == 1
+    assert run_logs[0]["passed_count"] == 0
+    assert run_logs[0]["error_type"] == "SoftTimeLimitExceeded"
 
 
 def test_probe_result_exposes_minimal_agentic_stats(monkeypatch):

@@ -98,6 +98,7 @@ class HelpDocsAdapter:
     ) -> None:
         self._render_limit = max(0, render_limit)
         self._render_budget = render_budget
+        self.last_stats = {"browser_pages": 0, "candidates_found": 0}
 
     def fetch(
         self,
@@ -112,9 +113,13 @@ class HelpDocsAdapter:
         Dispatches to the mock or live implementation based on
         `settings.use_collection_mock`.
         """
+        self.last_stats = {"browser_pages": 0, "candidates_found": 0}
         if settings.use_collection_mock:
-            return self._mock_fetch(cell_id, competitor_id, queries, limit=limit)
-        return self._live_fetch(cell_id, competitor_id, queries, limit=limit)
+            candidates = self._mock_fetch(cell_id, competitor_id, queries, limit=limit)
+        else:
+            candidates = self._live_fetch(cell_id, competitor_id, queries, limit=limit)
+        self.last_stats["candidates_found"] = len(candidates)
+        return candidates
 
     def _mock_fetch(
         self,
@@ -208,6 +213,7 @@ class HelpDocsAdapter:
         render_limit = min(self._render_limit, limit, len(urls))
         if self._render_budget is not None:
             render_limit = self._render_budget.reserve(render_limit)
+        self.last_stats["browser_pages"] = render_limit
         fetched = fetch_candidate_pages(urls, render_limit=render_limit)
 
         for url, got in fetched.items():  # fetcher preserves search-rank order

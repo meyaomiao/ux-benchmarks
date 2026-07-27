@@ -127,6 +127,8 @@ class TestReportScope:
 # active project through get_project_id.  Guards against a future endpoint
 # being added without the dependency (the original #19 leak).
 SCOPED_ROUTES = [
+    ("GET", "/api/v1/m3/probe-runs"),
+    ("GET", "/api/v1/m3/probe-runs/summary"),
     ("GET", "/api/v1/m4/shortlist/{cell_id}/{competitor_id}"),
     ("POST", "/api/v1/m4/shortlist/accept"),
     ("POST", "/api/v1/m4/shortlist/reject"),

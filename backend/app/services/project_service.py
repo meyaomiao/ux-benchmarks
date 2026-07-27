@@ -1,8 +1,8 @@
 """Project CRUD — the top-level workspace container.
 
-Deleting a project cascades to all its scoped data (competitors, cells,
-mapping cards, assets, observations, coverage, insights, reports) via
-raw deletes in FK-safe order, since those tables carry project_id.
+Deleting a project cascades to all its scoped data (probe diagnostics,
+competitors, cells, mapping cards, assets, observations, coverage, insights,
+reports) via raw deletes in FK-safe order, since those tables carry project_id.
 """
 from __future__ import annotations
 
@@ -49,6 +49,8 @@ def update_project(db: Session, project_id: UUID, data: dict) -> Project:
 
 # Tables carrying project_id, deleted leaves-first for FK safety.
 _SCOPED_TABLES = [
+    "probe_run_logs",
+    "probe_score_logs",
     "reports",
     "insights",
     "observations",
