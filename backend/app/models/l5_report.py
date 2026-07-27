@@ -51,7 +51,7 @@ class Report(TimestampMixin, Base):
     # The generated markdown report body.
     body_markdown: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
-    # "claude" | "mock"
+    # "gpt" | "mock"
     generated_by: Mapped[str] = mapped_column(
         String(32), nullable=False, default="claude", server_default=text("'claude'")
     )

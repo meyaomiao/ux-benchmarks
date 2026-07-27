@@ -12,10 +12,11 @@ floor is dropped before it ever reaches the human shortlist.
 
 Two brains sit behind the same ``Scorer`` protocol:
 
-  * REAL: Claude Vision (anthropic SDK). If the candidate has a screenshot we
-    send the image + the intent/inclusion/exclusion + anchor context and ask
-    the model to grade the five dimensions as JSON. Text-only sources (help
-    docs today) are graded from their extracted text.
+  * REAL: the GPT relay (OpenAI-compatible, ``settings.gpt_base_url``). If the
+    candidate has a screenshot we send the image + the intent/inclusion/
+    exclusion + anchor context and ask the model to grade the five dimensions
+    as JSON. Text-only sources (help docs today) are graded from their
+    extracted text.
   * MOCK: a deterministic keyword-overlap scorer (``score_from_text``). It is
     the default (``settings.use_collection_mock``) and the automatic fallback
     whenever the API key is missing or the real call raises. This keeps the
@@ -110,9 +111,6 @@ COMPETITOR_MARKERS = {
     "compared", "comparison", "rival", "rivals",
 }
 
-# Model used for the real Vision path.
-CLAUDE_MODEL = "claude-opus-4-8"
-
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _STOPWORDS = {
     "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with",
@@ -206,8 +204,8 @@ class RelevanceScorer:
     """Scores a Candidate against a cell's mapping-card intent + anchor.
 
     Implements the ``Scorer`` protocol from contracts. Uses the deterministic
-    mock in mock mode or when no API key is configured; otherwise calls Claude
-    Vision and falls back to the mock on any error.
+    mock in mock mode or when no API key is configured; otherwise calls the GPT
+    relay and falls back to the mock on any error.
     """
 
     def score(
@@ -225,9 +223,7 @@ class RelevanceScorer:
             part for part in (candidate.title, candidate.snippet, candidate.text_content) if part
         )
 
-        use_mock = settings.use_collection_mock or not (
-            settings.gpt_api_key or settings.anthropic_api_key
-        )
+        use_mock = settings.use_collection_mock or not settings.gpt_api_key
         scored_by = "mock"
 
         if use_mock:
@@ -239,11 +235,10 @@ class RelevanceScorer:
                 evidence_hint=candidate.evidence_type_hint,
                 has_image=has_image,
             )
-        elif settings.gpt_api_key:
+        else:
             # ALL candidates go to the GPT relay — text (luna) and images
-            # (vision). GPT 5.6 vision tested ≥ Claude Vision and faster, and
-            # this keeps everything on one relay for fast parallel scoring.
-            # Falls back to mock on failure. Claude is only used when no GPT key.
+            # (vision). One relay for the whole project, which keeps parallel
+            # scoring fast. Falls back to the mock on failure.
             img = (candidate.image_path or anchor_image_path) if has_image else None
             try:
                 rubric, reasoning = self._score_with_gpt(
@@ -266,32 +261,6 @@ class RelevanceScorer:
                     text=text, intent=intent_definition,
                     inclusion=inclusion_criteria, exclusion=exclusion_criteria,
                     evidence_hint=candidate.evidence_type_hint, has_image=has_image,
-                )
-        else:
-            try:
-                rubric, reasoning = self._score_with_claude(
-                    candidate=candidate,
-                    intent_definition=intent_definition,
-                    inclusion_criteria=inclusion_criteria,
-                    exclusion_criteria=exclusion_criteria,
-                    anchor_image_path=anchor_image_path,
-                    product_name=product_name,
-                )
-                scored_by = "claude-vision"
-            except Exception as exc:  # never crash the pipeline
-                logger.warning(
-                    "Claude relevance scoring failed for candidate %s, "
-                    "falling back to mock: %s",
-                    candidate.candidate_id,
-                    exc,
-                )
-                rubric, reasoning = score_from_text(
-                    text=text,
-                    intent=intent_definition,
-                    inclusion=inclusion_criteria,
-                    exclusion=exclusion_criteria,
-                    evidence_hint=candidate.evidence_type_hint,
-                    has_image=has_image,
                 )
 
         overall = _combine(rubric)
@@ -342,8 +311,8 @@ class RelevanceScorer:
         )
 
     # ------------------------------------------------------------------
-    # Real Claude Vision path. Lazy-imports the SDK so the module stays
-    # importable offline (and in CI where anthropic may be absent).
+    # Real GPT relay path (text + vision). Uses urllib only, so the module
+    # stays importable offline and in CI with no extra SDK dependency.
     # ------------------------------------------------------------------
     def _score_with_gpt(
         self,
@@ -446,145 +415,6 @@ class RelevanceScorer:
             fidelity=_clamp01(float(data.get("fidelity", 0.0))),
         )
         return rubric, str(data.get("reasoning", ""))[:400]
-
-    def _score_with_claude(
-        self,
-        *,
-        candidate: Candidate,
-        intent_definition: str,
-        inclusion_criteria: str,
-        exclusion_criteria: str,
-        anchor_image_path: Optional[str],
-        product_name: str = "",
-    ) -> tuple[RubricBreakdown, str]:
-        import anthropic  # lazy: only needed on the real path
-
-        # base_url override lets us point at a self-hosted / proxy
-        # Anthropic-compatible endpoint; empty => SDK default (api.anthropic.com).
-        client_kwargs = {"api_key": settings.anthropic_api_key}
-        if settings.anthropic_base_url:
-            client_kwargs["base_url"] = settings.anthropic_base_url
-        client = anthropic.Anthropic(**client_kwargs)
-
-        has_image = bool(candidate.image_path)
-
-        # Dual-mode rubric. Evidence quality is judged relative to the BEST
-        # evidence this source type can yield, not against an absolute "must be
-        # pixels" bar:
-        #   - image mode: strict — does it SHOW the target UI/state?
-        #   - text mode:  does it PRECISELY, REPRODUCIBLY describe the target
-        #     UI/flow (concrete controls, steps, states) vs vague marketing?
-        # A text-only score is capped by TEXT_ONLY_CEILING downstream, so a good
-        # procedural doc can pass while a screenshot of equal quality still ranks
-        # higher — the directness hierarchy stays honest.
-        if has_image:
-            mode_line = (
-                "You grade whether a SCREENSHOT SHOWS the target UI/state described "
-                "by the intent, not merely resembles the product. Score 0.0-1.0."
-            )
-            state_line = (
-                "- state_match: the screenshot visually shows the target page/state "
-                "(the actual controls/layout), not an unrelated screen"
-            )
-            fidelity_line = (
-                "- fidelity: resolution/clarity good enough to be a benchmark asset"
-            )
-        else:
-            mode_line = (
-                "You are grading a TEXT-ONLY artifact (no screenshot available). Do "
-                "NOT penalise it merely for lacking an image. Instead judge whether "
-                "it PRECISELY and REPRODUCIBLY describes the target UI/flow — naming "
-                "concrete controls, steps, and states so a designer could picture or "
-                "reproduce the screen — as opposed to vague marketing copy. Score 0.0-1.0."
-            )
-            state_line = (
-                "- state_match: how concretely/reproducibly the text describes the "
-                "target UI/flow (specific controls, steps, states) — high for a "
-                "step-by-step doc, low for vague feature mentions"
-            )
-            fidelity_line = (
-                "- fidelity: how usable this description is as a benchmark reference "
-                "(specific and detailed = high; generic = low)"
-            )
-
-        product_match_line = (
-            f"- product_match: it is evidence of «{product_name}» specifically "
-            f"(a DIFFERENT product with the same feature scores <=0.2; unclear=0.4)"
-            if product_name else
-            "- product_match: it is the target product, not a competitor/generic"
-        )
-        target_line = f"TARGET PRODUCT: {product_name}\n" if product_name else ""
-        instructions = (
-            f"{mode_line}\n\n"
-            f"{target_line}"
-            f"INTENT: {intent_definition}\n"
-            f"INCLUSION CRITERIA: {inclusion_criteria or '(none)'}\n"
-            f"EXCLUSION CRITERIA: {exclusion_criteria or '(none)'}\n\n"
-            "Rubric dimensions:\n"
-            f"{state_line}\n"
-            f"{product_match_line}\n"
-            "- version_recency: current UI generation vs stale\n"
-            "- evidence_directness: how direct the evidence is (shown/observed high, "
-            "described moderate, merely claimed low)\n"
-            f"{fidelity_line}\n\n"
-            "Respond with ONLY a JSON object with keys state_match, "
-            "product_match, version_recency, evidence_directness, fidelity, "
-            "reasoning. 请用中文回复 reasoning 字段。"
-        )
-
-        content: list[dict] = []
-        if has_image:
-            import base64
-
-            with open(candidate.image_path, "rb") as fh:
-                image_b64 = base64.standard_b64encode(fh.read()).decode("ascii")
-            content.append(
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": _media_type(candidate.image_path),
-                        "data": image_b64,
-                    },
-                }
-            )
-        else:
-            text = " ".join(
-                p for p in (candidate.title, candidate.snippet, candidate.text_content) if p
-            )
-            instructions += f"\n\nARTIFACT TEXT:\n{text}"
-
-        content.append({"type": "text", "text": instructions})
-
-        message = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": content}],
-        )
-
-        raw = "".join(block.text for block in message.content if block.type == "text")
-        data = _extract_json(raw)
-
-        rubric = RubricBreakdown(
-            state_match=_clamp01(float(data.get("state_match", 0.0))),
-            product_match=_clamp01(float(data.get("product_match", 0.0))),
-            version_recency=_clamp01(float(data.get("version_recency", 0.0))),
-            evidence_directness=_clamp01(float(data.get("evidence_directness", 0.0))),
-            fidelity=_clamp01(float(data.get("fidelity", 0.0))),
-        )
-        reasoning = str(data.get("reasoning", "")).strip() or "[claude-vision]"
-        return rubric, reasoning
-
-
-def _media_type(path: str) -> str:
-    lower = path.lower()
-    if lower.endswith((".jpg", ".jpeg")):
-        return "image/jpeg"
-    if lower.endswith(".webp"):
-        return "image/webp"
-    if lower.endswith(".gif"):
-        return "image/gif"
-    return "image/png"
 
 
 def _extract_json(raw: str) -> dict:

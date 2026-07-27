@@ -86,4 +86,4 @@ class GridGenerationResponse(BaseModel):
     journey_stages: list[str]
     cells: list[GeneratedCell]
     total: int
-    generated_by: str  # "claude" | "mock"
+    generated_by: str  # "gpt" | "mock"

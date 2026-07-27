@@ -1,6 +1,6 @@
 """AI-powered mapping card draft generation (#35).
 
-Given a grid cell's coordinates (jtbd × journey_stage × page_state), Claude
+Given a grid cell's coordinates (jtbd × journey_stage × page_state), the model
 drafts the three mapping-card fields so the user only fine-tunes instead of
 writing from scratch:
 
@@ -16,11 +16,11 @@ from __future__ import annotations
 import logging
 
 from app.core.config import settings
+from app.utils import gpt_relay
 from app.utils.robust_json import extract_json
 
 logger = logging.getLogger(__name__)
 
-CLAUDE_MODEL = "claude-opus-4-8"
 
 _SYSTEM = (
     "你是 UX 竞品研究方法专家。给定一个场景网格格子（用户任务 × 旅程阶段 × "
@@ -37,14 +37,7 @@ def _mock_draft(jtbd: str, journey_stage: str, page_state: str) -> dict:
     }
 
 
-def _call_claude(jtbd: str, journey_stage: str, page_state: str) -> dict:
-    import anthropic  # lazy import
-
-    kw: dict = {"api_key": settings.anthropic_api_key}
-    if settings.anthropic_base_url:
-        kw["base_url"] = settings.anthropic_base_url
-    client = anthropic.Anthropic(**kw)
-
+def _call_llm(jtbd: str, journey_stage: str, page_state: str) -> dict:
     prompt = (
         f"场景格子坐标：\n"
         f"- 用户任务(JTBD)：{jtbd}\n"
@@ -59,13 +52,7 @@ def _call_claude(jtbd: str, journey_stage: str, page_state: str) -> dict:
         "返回纯 JSON（无代码块）：\n"
         '{"intent_definition":"...","inclusion_criteria":"...","exclusion_criteria":"..."}'
     )
-    msg = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=1024,
-        system=_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    raw = "".join(b.text for b in msg.content if b.type == "text")
+    raw = gpt_relay.chat(system=_SYSTEM, prompt=prompt, max_tokens=1024)
     return extract_json(raw)
 
 
@@ -73,13 +60,13 @@ def generate_card_draft(jtbd: str, journey_stage: str, page_state: str) -> dict:
     """Return a mapping-card draft dict for the given cell coordinates.
 
     Keys: intent_definition, inclusion_criteria, exclusion_criteria.
-    Uses Claude when available; otherwise a deterministic template.
+    Uses the GPT relay when available; otherwise a deterministic template.
     """
-    use_mock = settings.use_collection_mock or not settings.anthropic_api_key
+    use_mock = settings.use_collection_mock or not gpt_relay.relay_available()
     if use_mock:
         return _mock_draft(jtbd, journey_stage, page_state)
     try:
-        draft = _call_claude(jtbd, journey_stage, page_state)
+        draft = _call_llm(jtbd, journey_stage, page_state)
         # Enforce the intent length cap the schema requires.
         intent = str(draft.get("intent_definition", ""))[:150]
         return {

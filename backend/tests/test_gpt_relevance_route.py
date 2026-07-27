@@ -11,11 +11,10 @@ from app.services.m3_collection.contracts import (
 from app.services.m3_collection.scoring.relevance_scorer import RelevanceScorer
 
 
-def test_gpt_route_does_not_require_anthropic_key(monkeypatch):
+def test_gpt_relay_is_the_only_real_scoring_path(monkeypatch):
     monkeypatch.setattr(settings, "use_collection_mock", False)
     monkeypatch.setattr(settings, "gpt_api_key", "test-gpt-key")
     monkeypatch.setattr(settings, "gpt_scorer_model", "gpt-test")
-    monkeypatch.setattr(settings, "anthropic_api_key", "")
 
     def fake_gpt_score(_self, **_kwargs):
         return RubricBreakdown(

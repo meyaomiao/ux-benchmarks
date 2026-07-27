@@ -67,11 +67,11 @@ def _run(label, cand):
 
 if __name__ == "__main__":
     print(f"use_collection_mock = {settings.use_collection_mock}")
-    print(f"base_url set        = {bool(settings.anthropic_base_url)}")
-    print(f"key present         = {bool(settings.anthropic_api_key)}")
+    print(f"base_url            = {settings.gpt_base_url}")
+    print(f"key present         = {bool(settings.gpt_api_key)}")
     a = _run("A: SHOWS the permission UI (expect PASS)", SHOWS)
     b = _run("B: only MENTIONS permissions (expect FAIL)", MENTIONS)
     print("\n---")
-    ok = a.scored_by == "claude-vision" and a.passed and not b.passed
+    ok = a.scored_by.startswith("gpt:") and a.passed and not b.passed
     print("VERDICT:", "✅ real model correctly separated shows vs mentions"
           if ok else "⚠️ check output above (fell back to mock, or ranking unexpected)")

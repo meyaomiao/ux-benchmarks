@@ -6,7 +6,7 @@ import { mockCompetitors, mockLexicon, mockCells, mockCoverage, mockShortlist, m
 
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK !== "false";
 // In real mode we hit the backend directly (NEXT_PUBLIC_API_BASE) to bypass the
-// Next.js dev rewrite proxy's 30s hard timeout, which kills slow Claude calls.
+// Next.js dev rewrite proxy's 30s hard timeout, which kills slow relay calls.
 // Falls back to the same-origin proxy path when the env var isn't set.
 const BASE = process.env.NEXT_PUBLIC_API_BASE || "/api/v1";
 

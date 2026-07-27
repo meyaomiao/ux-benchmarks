@@ -19,11 +19,11 @@ from app.core.config import settings
 from app.core.errors import AppError
 from app.models.l3_insight import Insight
 from app.models.l5_report import Report
+from app.utils import gpt_relay
 from app.utils.robust_json import extract_json
 
 logger = logging.getLogger(__name__)
 
-CLAUDE_MODEL = "claude-opus-4-8"
 
 _AUDIENCE_DESC = {
     "management": "管理层决策者（非设计师），关注业务影响和行动建议，不需要机制细节",
@@ -96,15 +96,8 @@ def _build_context_block(insights: list[Insight]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def _call_claude(context: str, audience: str, format_type: str, title: str) -> str:
-    """Call Claude to compose a markdown report from insight modules."""
-    import anthropic
-
-    kw: dict = {"api_key": settings.anthropic_api_key}
-    if settings.anthropic_base_url:
-        kw["base_url"] = settings.anthropic_base_url
-    client = anthropic.Anthropic(**kw)
-
+def _call_llm(context: str, audience: str, format_type: str, title: str) -> str:
+    """Compose a markdown report from insight modules via the GPT relay."""
     system = (
         "你是 UX 竞品洞察专家，擅长将结构化洞察重组为面向不同受众的可读报告。"
         "报告必须基于输入的洞察内容，不能凭空增加证据或结论。"
@@ -121,13 +114,7 @@ def _call_claude(context: str, audience: str, format_type: str, title: str) -> s
         "- 根据受众调整措辞和详细程度\n"
         "- 输出纯 Markdown，从标题（#）开始\n"
     )
-    msg = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=3000,
-        system=system,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return "".join(b.text for b in msg.content if b.type == "text").strip()
+    return gpt_relay.chat(system=system, prompt=prompt, max_tokens=3000)
 
 
 def _auto_title(audience: str, format_type: str) -> str:
@@ -161,7 +148,7 @@ def compose_report(
         raise AppError("NOT_FOUND", "没有找到指定洞察", 404)
 
     final_title = title or _auto_title(audience, format_type)
-    use_mock = settings.use_collection_mock or not settings.anthropic_api_key
+    use_mock = settings.use_collection_mock or not gpt_relay.relay_available()
 
     if use_mock:
         body = _MOCK_BODY.format(count=len(insights))
@@ -169,8 +156,8 @@ def compose_report(
     else:
         try:
             context = _build_context_block(insights)
-            body = _call_claude(context, audience, format_type, final_title)
-            generated_by = "claude"
+            body = _call_llm(context, audience, format_type, final_title)
+            generated_by = "gpt"
         except Exception as exc:
             logger.warning("Report compose failed, using mock: %s", exc)
             body = _MOCK_BODY.format(count=len(insights))

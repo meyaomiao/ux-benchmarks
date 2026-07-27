@@ -1,7 +1,7 @@
 """L3 insight service — generate and manage structured design insights.
 
 Insights are produced from accepted Observations for a (cell, competitor) pair.
-Claude analyses what the evidence tells us about WHY a product's design is effective
+The model analyses what the evidence tells us about WHY a product's design is effective
 in that specific scenario, producing a falsifiable claim + mechanism + principle.
 """
 from __future__ import annotations
@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.errors import AppError
 from app.models.l3_insight import Insight
+from app.utils import gpt_relay
 from app.utils.robust_json import extract_json
 from app.models.m4_annotation import Observation
 from app.models.m3_collection import Asset
@@ -28,7 +29,6 @@ from app.services.m3_collection.asset_store import list_assets_for_cell
 
 logger = logging.getLogger(__name__)
 
-CLAUDE_MODEL = "claude-opus-4-8"
 
 _SYSTEM = (
     "你是 UX 竞品洞察专家。基于真实采集的证据，分析为什么某竞品在某个具体场景"
@@ -133,7 +133,7 @@ def generate_insight(
 ) -> Insight:
     """Generate a draft insight from accepted evidence for (cell, competitor).
 
-    Uses Claude when a key is configured and mock mode is off; otherwise returns
+    Uses the GPT relay when a key is configured and mock mode is off; otherwise returns
     a deterministic Chinese mock insight so the UI is fully functional offline.
     """
     if project_id is not None:
@@ -145,7 +145,7 @@ def generate_insight(
         if cell_project_id is None or cell_project_id != project_id:
             raise AppError("NOT_FOUND", f"Cell {cell_id} not found", 404)
 
-    use_mock = settings.use_collection_mock or not settings.anthropic_api_key
+    use_mock = settings.use_collection_mock or not gpt_relay.relay_available()
 
     # Load context: mapping card + accepted observations + competitor name.
     card = get_mapping_card_by_cell(db, cell_id)
@@ -190,9 +190,9 @@ def generate_insight(
         )
 
     try:
-        content = _call_claude(intent, comp_name, obs_texts)
+        content = _call_llm(intent, comp_name, obs_texts)
         obs_ids = [str(obs.id) for obs in obs_rows]
-        return _save_insight(db, cell_id, competitor_id, content, obs_ids, generated_by="claude")
+        return _save_insight(db, cell_id, competitor_id, content, obs_ids, generated_by="gpt")
     except Exception as exc:
         logger.warning("Insight generation failed, falling back to mock: %s", exc)
         mock = dict(_MOCK_INSIGHT)
@@ -200,14 +200,7 @@ def generate_insight(
         return _save_insight(db, cell_id, competitor_id, mock, [], generated_by="mock")
 
 
-def _call_claude(intent: str, comp_name: str, obs_texts: list[str]) -> dict:
-    import anthropic
-
-    kw: dict = {"api_key": settings.anthropic_api_key}
-    if settings.anthropic_base_url:
-        kw["base_url"] = settings.anthropic_base_url
-    client = anthropic.Anthropic(**kw)
-
+def _call_llm(intent: str, comp_name: str, obs_texts: list[str]) -> dict:
     obs_block = "\n".join(f"- {t}" for t in obs_texts) if obs_texts else "（无已接受观察记录）"
     prompt = (
         f"竞品：{comp_name}\n"
@@ -222,13 +215,7 @@ def _call_claude(intent: str, comp_name: str, obs_texts: list[str]) -> dict:
         "返回纯 JSON（无代码块）：\n"
         '{"claim":"...","analysis":"...","recommendation":"...","design_principle":"...","limits":"...","confidence":"medium"}'
     )
-    msg = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=2048,
-        system=_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    raw = "".join(b.text for b in msg.content if b.type == "text")
+    raw = gpt_relay.chat(system=_SYSTEM, prompt=prompt, max_tokens=2048)
     return extract_json(raw)
 
 

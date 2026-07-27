@@ -106,7 +106,7 @@ def _make_png(width: int = 8, height: int = 8, rgb: tuple = (100, 149, 237)) -> 
     """Return the bytes of a minimal valid PNG (solid colour, W×H pixels).
 
     Pure Python — no Pillow dependency. The PNG is tiny (≤ a few hundred bytes)
-    but is a fully valid image that PIL, browsers, and the Anthropic Vision API
+    but is a fully valid image that PIL, browsers, and the relay vision API
     can all open/read. Used for mock-mode fixture images.
     """
     r, g, b = rgb

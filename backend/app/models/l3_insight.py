@@ -62,7 +62,7 @@ class Insight(TimestampMixin, Base):
         server_default=text("'hypothesis'"),
     )
 
-    # "claude" | "human"
+    # "gpt" | "mock" | "human"
     generated_by: Mapped[str] = mapped_column(
         String, nullable=False, default="claude",
         server_default=text("'claude'"),
