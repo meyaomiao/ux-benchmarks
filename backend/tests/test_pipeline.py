@@ -25,7 +25,12 @@ from app.services.m3_collection.contracts import (
     Score,
     SourceType,
 )
-from app.services.m3_collection.pipeline import run_probe_pipeline
+from app.services.m3_collection.pipeline import (
+    DEFAULT_SOURCE_BUDGETS,
+    MAX_INITIAL_CANDIDATES_PER_PROBE,
+    MAX_SEARCH_CALLS_PER_PROBE,
+    run_probe_pipeline,
+)
 
 
 class _FakeAdapter:
@@ -278,6 +283,7 @@ def test_default_live_pipeline_wires_domains_and_keeps_all_existing_adapters(mon
     cell_id, competitor_id = uuid4(), uuid4()
     created = {}
     fetched = []
+    fetch_limits = []
     resolved_sources = []
 
     class _Competitor:
@@ -312,11 +318,11 @@ def test_default_live_pipeline_wires_domains_and_keeps_all_existing_adapters(mon
             self.source_type = source_type
 
         def fetch(self, got_cell_id, got_competitor_id, queries, *, limit=10):
-            del limit
             assert got_cell_id == cell_id
             assert got_competitor_id == competitor_id
             assert queries
             fetched.append(self.source_type.value)
+            fetch_limits.append((self.source_type, limit))
             return [
                 Candidate(
                     cell_id=cell_id,
@@ -336,9 +342,10 @@ def test_default_live_pipeline_wires_domains_and_keeps_all_existing_adapters(mon
             self.last_stats = {"stop_reason": "not_run"}
 
         def fetch(self, got_cell_id, got_competitor_id, queries, *, limit=10):
-            del got_cell_id, got_competitor_id, limit
+            del got_cell_id, got_competitor_id
             assert queries == []
             fetched.append(self.source_type.value)
+            fetch_limits.append((self.source_type, limit))
             self.last_stats = {"stop_reason": "adapter_failure"}
             raise RuntimeError("agentic browser failed")
 
@@ -371,8 +378,8 @@ def test_default_live_pipeline_wires_domains_and_keeps_all_existing_adapters(mon
     monkeypatch.setattr(pipeline_mod, "InteractiveDemoAdapter", _Interactive)
     monkeypatch.setattr(pipeline_mod, "WebSourceAdapter", _Web)
 
-    def resolve(queries, **_kwargs):
-        resolved_sources.append(list(queries))
+    def resolve(queries, **kwargs):
+        resolved_sources.append((list(queries), kwargs))
         return [f"https://resolved.example/{len(resolved_sources)}"]
 
     monkeypatch.setattr(pipeline_mod, "resolve_queries_to_urls", resolve)
@@ -392,19 +399,50 @@ def test_default_live_pipeline_wires_domains_and_keeps_all_existing_adapters(mon
     }
     assert fetched == [
         "agentic_site",
-        "help_docs",
         "interactive_demo",
+        "help_docs",
         "community",
         "generic",
     ]
     assert resolved_sources == [
-        ["help query"],
-        ["demo query"],
-        ["community query"],
-        ["generic query"],
+        (["demo query"], {
+            "max_total": 6,
+            "max_searches": 3,
+            "allow_unanchored_fallback": False,
+        }),
+        (["help query"], {
+            "max_total": 12,
+            "max_searches": 2,
+            "allow_unanchored_fallback": False,
+        }),
+        (["community query"], {
+            "max_total": 8,
+            "max_searches": 2,
+            "allow_unanchored_fallback": True,
+        }),
+        (["generic query"], {
+            "max_total": 10,
+            "max_searches": 3,
+            "allow_unanchored_fallback": True,
+        }),
+    ]
+    assert fetch_limits == [
+        (source_type, DEFAULT_SOURCE_BUDGETS[source_type].max_candidates)
+        for source_type in (
+            SourceType.AGENTIC_SITE,
+            SourceType.INTERACTIVE_DEMO,
+            SourceType.HELP_DOCS,
+            SourceType.COMMUNITY,
+            SourceType.GENERIC,
+        )
     ]
     assert result.candidates_found == 4
     assert result.agentic_stats == {"stop_reason": "adapter_failure"}
+
+
+def test_default_source_budgets_bound_total_probe_cost():
+    assert MAX_SEARCH_CALLS_PER_PROBE == 10
+    assert MAX_INITIAL_CANDIDATES_PER_PROBE == 40
 
 
 def test_agentic_image_candidate_enters_existing_scorer(monkeypatch, tmp_path):

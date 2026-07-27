@@ -31,9 +31,18 @@ from app.services.m3_collection.interaction_pattern import (
 
 logger = logging.getLogger(__name__)
 
-# Intent modifiers appended to base queries so we surface task-oriented pages
-# (guides, setup docs) rather than only marketing pages.
-INTENT_TERMS = ["how to", "setup", "configure", "demo", "walkthrough", "tutorial"]
+# UI-bearing page types lead the generic bucket because only its first few
+# queries consume the bounded search budget. Procedural terms remain as fallback.
+INTENT_TERMS = [
+    "demo",
+    "walkthrough",
+    "screenshot",
+    "interface",
+    "how to",
+    "setup",
+    "configure",
+    "tutorial",
+]
 
 # Version/recency modifiers so we can bias toward current UI over stale results.
 VERSION_TERMS = ["2025", "2026", "latest", "new UI"]
@@ -246,14 +255,22 @@ def expand_terms_for_cell(
     # burns screenshot + vision budget. Emit it only when we have no competitor.
     interactive_demo: list[str] = []
     if competitors:
-        for demo_kind in ("interactive demo", "product tour"):
-            for name in competitors:
+        for name in competitors:
+            for demo_kind in (
+                "interactive demo",
+                "product walkthrough",
+                "screenshot interface",
+            ):
                 anchor = _site_anchor(competitor_domains, name, prefer="official")
                 interactive_demo.append(
                     f"{anchor} {name} {off_phrase} {demo_kind}".strip()
                 )
     else:
-        for demo_kind in ("interactive demo", "product tour"):
+        for demo_kind in (
+            "interactive demo",
+            "product walkthrough",
+            "screenshot interface",
+        ):
             interactive_demo.append(f"{off_phrase} {demo_kind}")
 
     # video: video/walkthrough phrasing, optionally prefixed by competitor.

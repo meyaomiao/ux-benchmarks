@@ -42,9 +42,9 @@ _UA = (
 )
 
 # Rendering is intentionally narrow: the three eligible live adapters each get
-# at most two attempts, and the default pipeline shares a six-attempt budget.
-DEFAULT_RENDER_LIMIT_PER_ADAPTER = 2
-DEFAULT_RENDER_LIMIT_PER_PROBE = 6
+# at most three attempts, and the default pipeline shares an eight-attempt budget.
+DEFAULT_RENDER_LIMIT_PER_ADAPTER = 3
+DEFAULT_RENDER_LIMIT_PER_PROBE = 8
 
 
 @dataclass(frozen=True)

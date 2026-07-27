@@ -17,6 +17,8 @@ from app.services.m3_collection import content_fetch
 from app.services.m3_collection.adapters import web_source
 from app.services.m3_collection.adapters.web_source import WebSourceAdapter
 from app.services.m3_collection.content_fetch import (
+    DEFAULT_RENDER_LIMIT_PER_ADAPTER,
+    DEFAULT_RENDER_LIMIT_PER_PROBE,
     FetchedPage,
     RenderBudget,
     fetch_candidate_pages,
@@ -269,6 +271,8 @@ def test_render_limit_deduplicates_urls_and_uses_unique_paths(monkeypatch, tmp_p
 
 
 def test_shared_render_budget_caps_attempts_across_adapters():
+    assert DEFAULT_RENDER_LIMIT_PER_ADAPTER == 3
+    assert DEFAULT_RENDER_LIMIT_PER_PROBE == 8
     budget = RenderBudget(3)
 
     assert budget.reserve(2) == 2
