@@ -124,6 +124,7 @@ class ExplorerStats:
 class ExplorerResult:
     pages: tuple[ExploredPage, ...]
     stats: ExplorerStats
+    trace: tuple[dict, ...] = ()
 
 
 def canonical_url(url: str) -> str:
@@ -454,15 +455,16 @@ def explore_competitor_site(
     deadline = started + MAX_TOTAL_SECONDS
     stats = ExplorerStats()
     saved_pages: list[ExploredPage] = []
+    trace: list[dict] = []
     seeds, allowed_domains = build_trusted_seeds(official_domain, help_center_domain)
     if not seeds:
         stats.stop_reason = "no_trusted_seeds"
         stats.duration_ms = int((time.monotonic() - started) * 1000)
-        return ExplorerResult((), stats)
+        return ExplorerResult((), stats, ())
     if decision_fn is None and not gpt_relay.relay_available():
         stats.stop_reason = "model_unavailable"
         stats.duration_ms = int((time.monotonic() - started) * 1000)
-        return ExplorerResult((), stats)
+        return ExplorerResult((), stats, ())
 
     guard = UrlGuard(allowed_domains)
     pending_seeds = deque(seeds)
@@ -537,6 +539,13 @@ def explore_competitor_site(
                             raise
                         except Exception as exc:  # noqa: BLE001 - try the other trusted seed
                             stats.page_failures += 1
+                            trace.append(
+                                {
+                                    "event": "page_failure",
+                                    "url": canonical_url(target_url),
+                                    "error_type": type(exc).__name__,
+                                }
+                            )
                             logger.info("agentic navigation failed for %s: %s", target_url, exc)
                             loaded = False
                             if pending_seeds:
@@ -551,6 +560,13 @@ def explore_competitor_site(
                         raise
                     except Exception as exc:  # noqa: BLE001
                         stats.page_failures += 1
+                        trace.append(
+                            {
+                                "event": "page_failure",
+                                "url": canonical_url(page.url),
+                                "error_type": type(exc).__name__,
+                            }
+                        )
                         logger.info("agentic page extraction failed for %s: %s", page.url, exc)
                         stats.stop_reason = "page_failure"
                         break
@@ -596,15 +612,38 @@ def explore_competitor_site(
                     except SoftTimeLimitExceeded:
                         raise
                     except ValueError as exc:
+                        trace.append(
+                            {
+                                "step": stats.steps,
+                                "page_url": canonical_url(observation.url),
+                                "action": "invalid",
+                                "error_type": type(exc).__name__,
+                            }
+                        )
                         logger.info("agentic model action rejected: %s", exc)
                         stats.stop_reason = "model_invalid"
                         break
                     except Exception as exc:  # noqa: BLE001
+                        trace.append(
+                            {
+                                "step": stats.steps,
+                                "page_url": canonical_url(observation.url),
+                                "action": "model_failure",
+                                "error_type": type(exc).__name__,
+                            }
+                        )
                         logger.info("agentic model call failed: %s", exc)
                         stats.stop_reason = "model_failure"
                         break
 
                     if action.action == "stop":
+                        trace.append(
+                            {
+                                "step": stats.steps,
+                                "page_url": canonical_url(observation.url),
+                                "action": "stop",
+                            }
+                        )
                         stats.stop_reason = "model_stop"
                         break
                     if action.action == "open_link":
@@ -614,6 +653,15 @@ def explore_competitor_site(
                         if canonical_url(selected.url) in visited:
                             stats.stop_reason = "duplicate_url"
                             break
+                        trace.append(
+                            {
+                                "step": stats.steps,
+                                "page_url": canonical_url(observation.url),
+                                "action": "open_link",
+                                "target_url": canonical_url(selected.url),
+                                "link_text": selected.text,
+                            }
+                        )
                         target_url = selected.url
                         loaded = False
                         continue
@@ -622,6 +670,14 @@ def explore_competitor_site(
                             stats.stop_reason = "page_budget"
                             break
                         try:
+                            trace.append(
+                                {
+                                    "step": stats.steps,
+                                    "page_url": canonical_url(observation.url),
+                                    "action": "search",
+                                    "query": action.query,
+                                }
+                            )
                             stats.pages_opened += 1
                             search_box = page.locator(_SEARCH_SELECTOR).first
                             search_box.fill(action.query)
@@ -656,6 +712,14 @@ def explore_competitor_site(
                         no_progress += 1
                         continue
                     captured = _save_page(observation, page)
+                    trace.append(
+                        {
+                            "step": stats.steps,
+                            "page_url": current,
+                            "action": "save",
+                            "saved": captured is not None,
+                        }
+                    )
                     if captured is None:
                         no_progress += 1
                         if no_progress >= MAX_NO_PROGRESS:
@@ -681,8 +745,11 @@ def explore_competitor_site(
                     finally:
                         if browser is not None:
                             _close_playwright_resource(browser, "agentic browser")
-    except SoftTimeLimitExceeded:
+    except SoftTimeLimitExceeded as exc:
         stats.stop_reason = "soft_time_limit"
+        stats.duration_ms = int((time.monotonic() - started) * 1000)
+        setattr(exc, "agentic_stats", stats.to_dict())
+        setattr(exc, "agentic_trace", tuple(trace))
         raise
     except ImportError:
         stats.stop_reason = "playwright_unavailable"
@@ -692,4 +759,4 @@ def explore_competitor_site(
     finally:
         stats.duration_ms = int((time.monotonic() - started) * 1000)
 
-    return ExplorerResult(tuple(saved_pages), stats)
+    return ExplorerResult(tuple(saved_pages), stats, tuple(trace))

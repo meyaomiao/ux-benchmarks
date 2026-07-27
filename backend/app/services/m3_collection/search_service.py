@@ -253,6 +253,7 @@ def resolve_queries_to_urls(
     max_total: int = _MAX_URLS_TOTAL,
     max_searches: int = _MAX_SEARCHES_PER_PROBE,
     allow_unanchored_fallback: bool = True,
+    metrics: dict[str, int] | None = None,
 ) -> list[str]:
     """Resolve a list of query strings into a deduplicated URL list.
 
@@ -274,40 +275,43 @@ def resolve_queries_to_urls(
     urls: list[str] = []
     searches_done = 0
 
-    for query in queries:
-        if len(urls) >= max_total:
-            break
-        parsed = urlparse(query.strip())
-        if parsed.scheme in ("http", "https") and parsed.netloc:
-            if query not in seen:
-                seen.add(query)
-                urls.append(query)
-        else:
-            if searches_done >= max_searches:
-                continue  # search budget spent — skip remaining search queries
-            searches_done += 1
-            # Over-fetch (2x) then drop junk domains, so the filter doesn't
-            # shrink the usable set below what the probe needs.
-            remaining = max_total - len(urls)
-            result_limit = min(_RESULTS_PER_QUERY * 2, remaining * 2 + 4)
-            found_urls = search_urls(query, n=result_limit)
-            fallback_query = _SITE_PREFIX_RE.sub("", query, count=1).strip()
-            if (
-                allow_unanchored_fallback
-                and not found_urls
-                and fallback_query
-                and fallback_query != query.strip()
-                and searches_done < max_searches
-            ):
+    try:
+        for query in queries:
+            if len(urls) >= max_total:
+                break
+            parsed = urlparse(query.strip())
+            if parsed.scheme in ("http", "https") and parsed.netloc:
+                if query not in seen:
+                    seen.add(query)
+                    urls.append(query)
+            else:
+                if searches_done >= max_searches:
+                    continue  # search budget spent — skip remaining search queries
                 searches_done += 1
-                found_urls = search_urls(fallback_query, n=result_limit)
+                # Over-fetch (2x) then drop junk domains, so the filter doesn't
+                # shrink the usable set below what the probe needs.
+                remaining = max_total - len(urls)
+                result_limit = min(_RESULTS_PER_QUERY * 2, remaining * 2 + 4)
+                found_urls = search_urls(query, n=result_limit)
+                fallback_query = _SITE_PREFIX_RE.sub("", query, count=1).strip()
+                if (
+                    allow_unanchored_fallback
+                    and not found_urls
+                    and fallback_query
+                    and fallback_query != query.strip()
+                    and searches_done < max_searches
+                ):
+                    searches_done += 1
+                    found_urls = search_urls(fallback_query, n=result_limit)
 
-            for url in found_urls:
-                if url in seen or _is_junk_url(url):
-                    continue
-                seen.add(url)
-                urls.append(url)
-                if len(urls) >= max_total:
-                    break
-
+                for url in found_urls:
+                    if url in seen or _is_junk_url(url):
+                        continue
+                    seen.add(url)
+                    urls.append(url)
+                    if len(urls) >= max_total:
+                        break
+    finally:
+        if metrics is not None:
+            metrics.update(search_calls=searches_done, urls_found=len(urls))
     return urls

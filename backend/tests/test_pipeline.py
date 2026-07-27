@@ -31,6 +31,7 @@ from app.services.m3_collection.pipeline import (
     MAX_SEARCH_CALLS_PER_PROBE,
     run_probe_pipeline,
 )
+from app.services.m3_collection.probe_observability import ProbeTelemetry
 
 
 class _FakeAdapter:
@@ -379,6 +380,8 @@ def test_default_live_pipeline_wires_domains_and_keeps_all_existing_adapters(mon
     monkeypatch.setattr(pipeline_mod, "WebSourceAdapter", _Web)
 
     def resolve(queries, **kwargs):
+        metrics = kwargs.pop("metrics")
+        metrics.update(search_calls=1, urls_found=1)
         resolved_sources.append((list(queries), kwargs))
         return [f"https://resolved.example/{len(resolved_sources)}"]
 
@@ -505,6 +508,91 @@ def test_agentic_image_candidate_enters_existing_scorer(monkeypatch, tmp_path):
     assert len(scorer.candidates) == 1
     assert scorer.candidates[0].source_type == SourceType.AGENTIC_SITE
     assert result.agentic_stats["candidates_saved"] == 1
+
+
+def test_pipeline_records_source_costs_agentic_trace_and_scoring_calls(
+    monkeypatch, tmp_path
+):
+    _patch_db(monkeypatch)
+    monkeypatch.setattr(pipeline_mod.settings, "use_collection_mock", False)
+    image_path = tmp_path / "permissions.png"
+    image_path.write_bytes(b"image")
+
+    trace = ({"step": 1, "action": "save", "page_url": "https://example.com/"},)
+
+    def explorer(**_kwargs):
+        return ExplorerResult(
+            pages=(
+                ExploredPage(
+                    source_url="https://example.com/",
+                    title="Permissions",
+                    text_content="Rendered permission controls",
+                    image_path=str(image_path),
+                ),
+            ),
+            stats=ExplorerStats(
+                steps=3,
+                pages_opened=2,
+                candidates_saved=1,
+                model_calls=3,
+                stop_reason="model_stop",
+            ),
+            trace=trace,
+        )
+
+    def resolve(queries, *, metrics, **_kwargs):
+        metrics.update(search_calls=2, urls_found=len(queries))
+        return list(queries)
+
+    monkeypatch.setattr(pipeline_mod, "resolve_queries_to_urls", resolve)
+    agentic = AgenticSiteAdapter(
+        competitor_name="Acme",
+        intent="permissions",
+        official_domain="example.com",
+        help_center_domain=None,
+        explorer=explorer,
+    )
+    telemetry = ProbeTelemetry()
+
+    class _AllPassScorer:
+        def score(self, candidate, **_kwargs):
+            return Score(
+                candidate_id=candidate.candidate_id,
+                score=0.9,
+                passed=True,
+                evidence_type=EvidenceType.OBSERVED,
+                rubric=RubricBreakdown(state_match=0.9),
+                reasoning="telemetry",
+            )
+
+    result = run_probe_pipeline(
+        db=None,
+        cell_id=uuid4(),
+        competitor_id=uuid4(),
+        adapters=[agentic, _FakeAdapter(2)],
+        scorer=_AllPassScorer(),
+        telemetry=telemetry,
+    )
+
+    assert result.candidates_found == 3
+    assert telemetry.scoring_calls == 3
+    assert telemetry.search_calls == 2
+    assert telemetry.browser_pages == 2
+    assert telemetry.agentic_model_calls == 3
+    assert telemetry.agentic_trace == list(trace)
+    assert telemetry.source_stats["agentic_site"] == {
+        "queries_available": 0,
+        "search_calls": 0,
+        "urls_found": 0,
+        "candidates_found": 1,
+        "browser_pages": 2,
+        "duration_ms": telemetry.source_stats["agentic_site"]["duration_ms"],
+        "status": "ok",
+        "error_type": None,
+    }
+    assert telemetry.source_stats["help_docs"]["search_calls"] == 2
+    assert telemetry.source_stats["help_docs"]["urls_found"] == 2
+    assert telemetry.source_stats["help_docs"]["candidates_found"] == 2
 
 
 def test_cross_adapter_url_dedup_prefers_image_then_richer_text():

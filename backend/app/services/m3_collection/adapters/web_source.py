@@ -52,6 +52,7 @@ class WebSourceAdapter:
         self.source_type = source_type
         self._render_limit = max(0, render_limit)
         self._render_budget = render_budget
+        self.last_stats = {"browser_pages": 0, "candidates_found": 0}
 
     def fetch(
         self,
@@ -60,6 +61,7 @@ class WebSourceAdapter:
         queries: list[str],
         limit: int = 5,
     ) -> list[Candidate]:
+        self.last_stats = {"browser_pages": 0, "candidates_found": 0}
         # Mock mode: adapters return nothing here (fixtures live elsewhere); the
         # real value of this adapter is live fetching. Keep it a no-op offline.
         if settings.use_collection_mock:
@@ -72,6 +74,7 @@ class WebSourceAdapter:
         render_limit = min(self._render_limit, limit, len(urls))
         if self._render_budget is not None:
             render_limit = self._render_budget.reserve(render_limit)
+        self.last_stats["browser_pages"] = render_limit
         fetched = fetch_candidate_pages(urls, render_limit=render_limit)
 
         candidates: list[Candidate] = []
@@ -93,4 +96,5 @@ class WebSourceAdapter:
                     evidence_type_hint=_classify(text),
                 )
             )
+        self.last_stats["candidates_found"] = len(candidates)
         return candidates

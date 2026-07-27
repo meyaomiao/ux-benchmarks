@@ -1,4 +1,7 @@
 """Unit tests for search query resolution."""
+import pytest
+from billiard.exceptions import SoftTimeLimitExceeded
+
 from app.services.m3_collection import search_service
 
 
@@ -72,3 +75,33 @@ def test_official_bucket_query_does_not_fall_back_unanchored(monkeypatch):
 
     assert result == []
     assert calls == [anchored]  # no unanchored retry
+
+
+def test_resolution_reports_actual_search_and_url_counts(monkeypatch):
+    monkeypatch.setattr(
+        search_service,
+        "search_urls",
+        lambda _query, n: ["https://example.com/result"],
+    )
+    metrics = {}
+
+    result = search_service.resolve_queries_to_urls(
+        ["https://example.com/direct", "permissions query"], metrics=metrics
+    )
+
+    assert result == ["https://example.com/direct", "https://example.com/result"]
+    assert metrics == {"search_calls": 1, "urls_found": 2}
+
+
+def test_resolution_preserves_partial_metrics_on_soft_timeout(monkeypatch):
+    monkeypatch.setattr(
+        search_service,
+        "search_urls",
+        lambda _query, n: (_ for _ in ()).throw(SoftTimeLimitExceeded()),
+    )
+    metrics = {}
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        search_service.resolve_queries_to_urls(["permissions query"], metrics=metrics)
+
+    assert metrics == {"search_calls": 1, "urls_found": 0}

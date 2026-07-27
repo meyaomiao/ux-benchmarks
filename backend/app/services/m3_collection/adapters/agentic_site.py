@@ -37,6 +37,7 @@ class AgenticSiteAdapter:
         self._help_center_domain = help_center_domain
         self._explorer = explorer
         self.last_stats = ExplorerStats(stop_reason="not_run").to_dict()
+        self.last_trace: list[dict] = []
 
     def fetch(
         self,
@@ -49,6 +50,7 @@ class AgenticSiteAdapter:
         del queries
         if settings.use_collection_mock:
             self.last_stats = ExplorerStats(stop_reason="mock_mode").to_dict()
+            self.last_trace = []
             return []
 
         try:
@@ -58,13 +60,20 @@ class AgenticSiteAdapter:
                 official_domain=self._official_domain,
                 help_center_domain=self._help_center_domain,
             )
-        except SoftTimeLimitExceeded:
-            self.last_stats = ExplorerStats(stop_reason="soft_time_limit").to_dict()
+        except SoftTimeLimitExceeded as exc:
+            self.last_stats = getattr(
+                exc,
+                "agentic_stats",
+                ExplorerStats(stop_reason="soft_time_limit").to_dict(),
+            )
+            self.last_trace = list(getattr(exc, "agentic_trace", ()))
             raise
         except Exception:
             self.last_stats = ExplorerStats(stop_reason="adapter_failure").to_dict()
+            self.last_trace = []
             raise
         self.last_stats = result.stats.to_dict()
+        self.last_trace = list(result.trace)
         return [
             Candidate(
                 cell_id=cell_id,

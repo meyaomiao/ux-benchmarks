@@ -18,7 +18,9 @@ settings.use_collection_mock) so this is testable offline with fakes. Pass
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+import time
+from dataclasses import asdict, dataclass, field, replace
+from threading import Lock
 from uuid import UUID
 
 from billiard.exceptions import SoftTimeLimitExceeded
@@ -55,6 +57,7 @@ from app.services.m3_collection.interaction_pattern import (
     abstracted_intent,
     needs_abstraction,
 )
+from app.services.m3_collection.probe_observability import ProbeTelemetry
 from app.services.m3_collection.query_expansion import build_query_bundle
 from app.services.m3_collection.scoring.relevance_scorer import (
     PRODUCT_MATCH_GATE,
@@ -135,6 +138,7 @@ def run_probe_pipeline(
     adapters: list[Adapter] | None = None,  # multi-adapter — takes precedence
     scorer: Scorer | None = None,
     per_bucket_limit: int = 10,
+    telemetry: ProbeTelemetry | None = None,
 ) -> ProbeResult:
     """Fetch candidates from all adapters, score them, and return the passers.
 
@@ -260,12 +264,19 @@ def run_probe_pipeline(
                 ),
             ]
         )
+        if telemetry is not None:
+            telemetry.source_budgets = {
+                source_type.value: asdict(budget)
+                for source_type, budget in DEFAULT_SOURCE_BUDGETS.items()
+            }
 
     # 3. Run all adapters, then collapse cross-channel URL duplicates before
     # scoring so the same page consumes only one vision call and database row.
     all_candidates: list[Candidate] = []
     agentic_stats: dict[str, int | str] = {}
     for adp in _adapters:
+        source_started = time.monotonic()
+        source_name = adp.source_type.value
         source_budget = (
             DEFAULT_SOURCE_BUDGETS.get(adp.source_type)
             if using_default_adapters
@@ -275,8 +286,13 @@ def run_probe_pipeline(
             source_budget.max_candidates if source_budget else per_bucket_limit
         )
         queries = []
+        search_metrics: dict[str, int] = {}
+        found: list[Candidate] = []
+        source_status = "ok"
+        error_type = None
         if getattr(adp, "uses_search_queries", True):
             queries = getattr(bundle, adp.source_type.value, []) or bundle.generic
+        queries_available = len(queries)
         try:
             if not settings.use_collection_mock and getattr(
                 adp, "uses_search_queries", True
@@ -292,12 +308,17 @@ def run_probe_pipeline(
                         source_budget.max_searches if source_budget else 3
                     ),
                     allow_unanchored_fallback=adp.source_type not in _OFFICIAL_BUCKETS,
+                    metrics=search_metrics,
                 )
             found = adp.fetch(cell_id, competitor_id, queries, limit=candidate_limit)
             all_candidates.extend(found)
         except SoftTimeLimitExceeded:
+            source_status = "soft_timeout"
+            error_type = "SoftTimeLimitExceeded"
             raise
         except Exception as exc:  # noqa: BLE001 - one adapter must not kill the others
+            source_status = "error"
+            error_type = type(exc).__name__
             import logging
 
             logging.getLogger(__name__).warning(
@@ -306,7 +327,25 @@ def run_probe_pipeline(
             )
         finally:
             if isinstance(adp, AgenticSiteAdapter):
-                agentic_stats = adp.last_stats
+                agentic_stats = getattr(adp, "last_stats", {}) or {}
+                if telemetry is not None:
+                    telemetry.agentic_stats = dict(agentic_stats)
+                    telemetry.agentic_trace = list(getattr(adp, "last_trace", []))
+            if telemetry is not None:
+                adapter_stats = getattr(adp, "last_stats", {}) or {}
+                browser_pages = adapter_stats.get(
+                    "browser_pages", adapter_stats.get("pages_opened", 0)
+                )
+                telemetry.source_stats[source_name] = {
+                    "queries_available": queries_available,
+                    "search_calls": int(search_metrics.get("search_calls", 0)),
+                    "urls_found": int(search_metrics.get("urls_found", 0)),
+                    "candidates_found": len(found),
+                    "browser_pages": int(browser_pages),
+                    "duration_ms": int((time.monotonic() - source_started) * 1000),
+                    "status": source_status,
+                    "error_type": error_type,
+                }
 
     all_candidates = _dedupe_candidates(all_candidates)
 
@@ -318,7 +357,12 @@ def run_probe_pipeline(
     # rounds. This is the main lever cutting a probe from ~12min to ~1min.
     from concurrent.futures import ThreadPoolExecutor
 
+    score_call_lock = Lock()
+
     def _score_one(cand: Candidate) -> tuple[Candidate, Score]:
+        if telemetry is not None:
+            with score_call_lock:
+                telemetry.scoring_calls += 1
         return cand, scorer.score(
             cand,
             intent_definition=intent,
@@ -340,7 +384,7 @@ def run_probe_pipeline(
         # candidates that died just under the floor, then score them again in
         # image mode. Both scores stay in `scored`, so the diagnostics log keeps
         # the full audit trail of why a candidate ended up where it did.
-        rescored = _rescore_near_threshold(scored, _score_one)
+        rescored = _rescore_near_threshold(scored, _score_one, telemetry=telemetry)
         for cand, score in rescored:
             scored.append((cand, score))
             if score.passed:
@@ -381,6 +425,8 @@ def _candidate_quality(candidate: Candidate) -> tuple[bool, int, int]:
 def _rescore_near_threshold(
     scored: list[tuple[Candidate, Score]],
     score_one,
+    *,
+    telemetry: ProbeTelemetry | None = None,
 ) -> list[tuple[Candidate, Score]]:
     """Screenshot near-miss text candidates and re-score them in image mode.
 
@@ -406,6 +452,8 @@ def _rescore_near_threshold(
     by_score = {cand.candidate_id: score.score for cand, score in scored}
     near_misses.sort(key=lambda c: by_score[c.candidate_id], reverse=True)
     near_misses = near_misses[:_RESCORE_MAX]
+    if telemetry is not None:
+        telemetry.rescore_render_attempts += len(near_misses)
 
     try:
         shots = capture_page_screenshots([c.source_url for c in near_misses])
