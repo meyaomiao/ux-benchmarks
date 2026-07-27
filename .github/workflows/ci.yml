@@ -55,3 +55,7 @@ jobs:
         working-directory: frontend
       - run: npm run build
         working-directory: frontend
+        env:
+          NEXT_PUBLIC_BASE_PATH: /benchmark
+      - run: node -e 'const manifest = require("./.next/routes-manifest.json"); if (manifest.basePath !== "/benchmark") throw new Error(`unexpected basePath: ${manifest.basePath}`)'
+        working-directory: frontend
