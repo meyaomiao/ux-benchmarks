@@ -46,6 +46,7 @@ def _finish_probing(db, cell_id: UUID, competitor_id: UUID, *, note: str):
     default_retry_delay=60,
     soft_time_limit=PROBE_SOFT_TIME_LIMIT,
     time_limit=PROBE_HARD_TIME_LIMIT,
+    acks_on_failure_or_timeout=False,
 )
 def run_probe_cycle(self, cell_id: str, competitor_id: str):
     """Run one probe cycle for a (cell, competitor) pair via run_probe.
