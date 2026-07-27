@@ -576,6 +576,9 @@ def test_pipeline_records_source_costs_agentic_trace_and_scoring_calls(
 
     assert result.candidates_found == 3
     assert telemetry.scoring_calls == 3
+    assert telemetry.candidates_found == 3
+    assert telemetry.scored_count == 3
+    assert telemetry.passed_count == 3
     assert telemetry.search_calls == 2
     assert telemetry.browser_pages == 2
     assert telemetry.agentic_model_calls == 3
@@ -593,6 +596,49 @@ def test_pipeline_records_source_costs_agentic_trace_and_scoring_calls(
     assert telemetry.source_stats["help_docs"]["search_calls"] == 2
     assert telemetry.source_stats["help_docs"]["urls_found"] == 2
     assert telemetry.source_stats["help_docs"]["candidates_found"] == 2
+
+
+def test_pipeline_preserves_partial_counts_when_scoring_fails(monkeypatch):
+    _patch_db(monkeypatch)
+
+    class _SequentialExecutor:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def map(self, func, items):
+            return map(func, items)
+
+    class _FailsSecondScore(_FakeScorer):
+        def score(self, candidate, **kwargs):
+            if candidate.source_url.endswith("/1"):
+                raise RuntimeError("relay unavailable")
+            return super().score(candidate, **kwargs)
+
+    monkeypatch.setattr(
+        "concurrent.futures.ThreadPoolExecutor", _SequentialExecutor
+    )
+    telemetry = ProbeTelemetry()
+
+    with pytest.raises(RuntimeError, match="relay unavailable"):
+        run_probe_pipeline(
+            db=None,
+            cell_id=uuid4(),
+            competitor_id=uuid4(),
+            adapter=_FakeAdapter(3),
+            scorer=_FailsSecondScore(),
+            telemetry=telemetry,
+        )
+
+    assert telemetry.candidates_found == 3
+    assert telemetry.scoring_calls == 2
+    assert telemetry.scored_count == 1
+    assert telemetry.passed_count == 1
 
 
 def test_cross_adapter_url_dedup_prefers_image_then_richer_text():

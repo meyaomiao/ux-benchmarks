@@ -37,6 +37,9 @@ class ProbeTelemetry:
     agentic_stats: dict[str, int | str] = field(default_factory=dict)
     agentic_trace: list[dict] = field(default_factory=list)
     scoring_calls: int = 0
+    candidates_found: int = 0
+    scored_count: int = 0
+    passed_count: int = 0
     rescore_render_attempts: int = 0
     finished_at: datetime | None = None
     duration_ms: int | None = None
@@ -75,6 +78,9 @@ class ProbeTelemetry:
             "browser_pages": self.browser_pages,
             "agentic_model_calls": self.agentic_model_calls,
             "scoring_calls": self.scoring_calls,
+            "candidates_found": self.candidates_found,
+            "scored_count": self.scored_count,
+            "passed_count": self.passed_count,
             "duration_ms": self.elapsed_ms(),
         }
 

@@ -86,6 +86,9 @@ def run_probe(db: Session, cell_id: UUID, competitor_id: UUID) -> dict:
             probe_cycle=probing.probe_cycles,
             outcome="soft_timeout",
             final_state=snapshot.status,
+            candidates_found=telemetry.candidates_found,
+            scored_count=telemetry.scored_count,
+            passed_count=telemetry.passed_count,
             error_type="SoftTimeLimitExceeded",
         )
         raise
@@ -103,6 +106,9 @@ def run_probe(db: Session, cell_id: UUID, competitor_id: UUID) -> dict:
             probe_cycle=probing.probe_cycles,
             outcome="failed",
             final_state=snapshot.status,
+            candidates_found=telemetry.candidates_found,
+            scored_count=telemetry.scored_count,
+            passed_count=telemetry.passed_count,
             error_type=type(exc).__name__,
         )
         raise

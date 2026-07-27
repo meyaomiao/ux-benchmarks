@@ -346,6 +346,7 @@ def run_probe_pipeline(
                     "status": source_status,
                     "error_type": error_type,
                 }
+                telemetry.candidates_found = len(_dedupe_candidates(all_candidates))
 
     all_candidates = _dedupe_candidates(all_candidates)
 
@@ -363,13 +364,19 @@ def run_probe_pipeline(
         if telemetry is not None:
             with score_call_lock:
                 telemetry.scoring_calls += 1
-        return cand, scorer.score(
+        score = scorer.score(
             cand,
             intent_definition=intent,
             inclusion_criteria=inclusion,
             exclusion_criteria=exclusion,
             product_name=product_name,
         )
+        if telemetry is not None:
+            with score_call_lock:
+                telemetry.scored_count += 1
+                if score.passed:
+                    telemetry.passed_count += 1
+        return cand, score
 
     scored: list[tuple[Candidate, Score]] = []
     passed: list[tuple[Candidate, Score]] = []

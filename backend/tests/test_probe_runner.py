@@ -167,7 +167,11 @@ def test_pipeline_failure_lands_on_rejected_empty_and_propagates(monkeypatch):
         live_evidence=True,
     )
 
-    def boom(*_args, **_kwargs):
+    def boom(*_args, **kwargs):
+        telemetry = kwargs["telemetry"]
+        telemetry.candidates_found = 5
+        telemetry.scored_count = 2
+        telemetry.passed_count = 1
         raise RuntimeError("ssl handshake failed")
 
     monkeypatch.setattr(probe_runner, "run_probe_pipeline", boom)
@@ -188,6 +192,9 @@ def test_pipeline_failure_lands_on_rejected_empty_and_propagates(monkeypatch):
 
     assert transitions == [CellState.PROBING, CellState.REJECTED_EMPTY]
     assert run_logs[0]["outcome"] == "failed"
+    assert run_logs[0]["candidates_found"] == 5
+    assert run_logs[0]["scored_count"] == 2
+    assert run_logs[0]["passed_count"] == 1
     assert run_logs[0]["error_type"] == "RuntimeError"
 
 
@@ -199,7 +206,10 @@ def test_soft_timeout_lands_on_rejected_empty_and_propagates(monkeypatch):
         live_evidence=True,
     )
 
-    def timeout(*_args, **_kwargs):
+    def timeout(*_args, **kwargs):
+        telemetry = kwargs["telemetry"]
+        telemetry.candidates_found = 4
+        telemetry.scored_count = 1
         raise SoftTimeLimitExceeded()
 
     monkeypatch.setattr(probe_runner, "run_probe_pipeline", timeout)
@@ -215,6 +225,9 @@ def test_soft_timeout_lands_on_rejected_empty_and_propagates(monkeypatch):
 
     assert transitions == [CellState.PROBING, CellState.REJECTED_EMPTY]
     assert run_logs[0]["outcome"] == "soft_timeout"
+    assert run_logs[0]["candidates_found"] == 4
+    assert run_logs[0]["scored_count"] == 1
+    assert run_logs[0]["passed_count"] == 0
     assert run_logs[0]["error_type"] == "SoftTimeLimitExceeded"
 
 

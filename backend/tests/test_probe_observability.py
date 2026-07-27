@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app.api.v1 import m3
+from app.services import project_service
 from app.services.m3_collection.probe_observability import (
     ProbeTelemetry,
     list_probe_runs,
@@ -254,3 +255,50 @@ def test_probe_run_summary_api_forwards_project_scope(monkeypatch):
 
     assert m3.get_probe_run_summary(db=db, project_id=project_id) == []
     assert calls == [(db, project_id)]
+
+
+def test_project_delete_clears_probe_logs_before_parent_rows():
+    project_id = uuid4()
+
+    class _DeleteSession:
+        def __init__(self):
+            self.project = SimpleNamespace(id=project_id)
+            self.statements = []
+            self.deleted = []
+            self.commits = 0
+
+        def get(self, _model, _project_id):
+            return self.project
+
+        def execute(self, statement, _params):
+            self.statements.append(getattr(statement, "text", str(statement)).strip())
+
+        def delete(self, row):
+            self.deleted.append(row)
+
+        def commit(self):
+            self.commits += 1
+
+    db = _DeleteSession()
+
+    assert project_service.delete_project(db, project_id) is True
+
+    scoped_deletes = [
+        statement
+        for statement in db.statements
+        if statement.startswith("DELETE FROM") and "WHERE project_id = :pid" in statement
+    ]
+    assert scoped_deletes[:2] == [
+        "DELETE FROM probe_run_logs WHERE project_id = :pid",
+        "DELETE FROM probe_score_logs WHERE project_id = :pid",
+    ]
+    assert scoped_deletes.index(
+        "DELETE FROM probe_run_logs WHERE project_id = :pid"
+    ) < scoped_deletes.index("DELETE FROM grid_cells WHERE project_id = :pid")
+    assert scoped_deletes.index(
+        "DELETE FROM probe_score_logs WHERE project_id = :pid"
+    ) < scoped_deletes.index(
+        "DELETE FROM competitor_entities WHERE project_id = :pid"
+    )
+    assert db.deleted == [db.project]
+    assert db.commits == 1
