@@ -115,7 +115,7 @@ def test_every_scored_candidate_is_logged_with_the_probe_cycle(monkeypatch):
     assert logged == [(scored, 2)]
 
 
-def test_pipeline_failure_still_lands_on_rejected_empty(monkeypatch):
+def test_pipeline_failure_lands_on_rejected_empty_and_propagates(monkeypatch):
     cell_id, competitor_id = uuid4(), uuid4()
     transitions = _wire(
         monkeypatch,
@@ -133,10 +133,10 @@ def test_pipeline_failure_still_lands_on_rejected_empty(monkeypatch):
         lambda *_args, **_kwargs: pytest.fail("nothing was scored"),
     )
 
-    out = probe_runner.run_probe(object(), cell_id, competitor_id)
+    with pytest.raises(RuntimeError, match="ssl handshake failed"):
+        probe_runner.run_probe(object(), cell_id, competitor_id)
 
     assert transitions == [CellState.PROBING, CellState.REJECTED_EMPTY]
-    assert out["error"].startswith("ssl handshake failed")
 
 
 def test_soft_timeout_lands_on_rejected_empty_and_propagates(monkeypatch):
@@ -156,3 +156,19 @@ def test_soft_timeout_lands_on_rejected_empty_and_propagates(monkeypatch):
         probe_runner.run_probe(object(), cell_id, competitor_id)
 
     assert transitions == [CellState.PROBING, CellState.REJECTED_EMPTY]
+
+
+def test_probe_result_exposes_minimal_agentic_stats(monkeypatch):
+    cell_id, competitor_id = uuid4(), uuid4()
+    result = _empty_result(cell_id, competitor_id, 0)
+    result.agentic_stats = {
+        "steps": 3,
+        "pages_opened": 2,
+        "candidates_saved": 1,
+        "stop_reason": "model_stop",
+    }
+    _wire(monkeypatch, result=result, live_evidence=False)
+
+    out = probe_runner.run_probe(object(), cell_id, competitor_id)
+
+    assert out["agentic_stats"] == result.agentic_stats

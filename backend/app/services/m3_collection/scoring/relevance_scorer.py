@@ -98,7 +98,11 @@ PRODUCT_MATCH_ZERO = 0.05
 # (forums, reviews, comparisons) and legitimately discuss the target product
 # alongside others, so they clear the 0.5 gate and are judged on overall score -
 # but they are STILL subject to the PRODUCT_MATCH_ZERO floor above.
-_OFFICIAL_SOURCES = {SourceType.HELP_DOCS, SourceType.INTERACTIVE_DEMO}
+_OFFICIAL_SOURCES = {
+    SourceType.HELP_DOCS,
+    SourceType.AGENTIC_SITE,
+    SourceType.INTERACTIVE_DEMO,
+}
 
 # Tokens that signal a current UI generation rather than a stale one.
 RECENCY_TOKENS = {

@@ -1,10 +1,9 @@
-"""Synchronous probe runner — shared by the Celery worker and the HTTP endpoint.
+"""Synchronous probe implementation owned by the browser Celery worker.
 
-Extracts the end-to-end probe orchestration (state transitions + pipeline +
-persistence + coverage recompute) so it can run either:
-  - async via Celery worker (app/workers/tasks/probe_cycle.py), or
-  - synchronously via POST /m3/probe-now (when no worker is running, so the
-    user gets immediate collection progress in the UI).
+The Celery task calls this function inline after it has acquired one browser
+worker slot. HTTP entry points enqueue that task and never call this module
+directly, keeping every production probe under the same concurrency and timeout
+limits.
 
 Returns a plain dict of counts + final state.
 """
@@ -60,12 +59,11 @@ def run_probe(db: Session, cell_id: UUID, competitor_id: UUID) -> dict:
             "passed": 0, "persisted": 0,
         }
     probing = transition_state(
-        db, str(cid), str(kid), CellState.PROBING, note="probe-now"
+        db, str(cid), str(kid), CellState.PROBING, note="probe-cycle"
     )
 
-    # A probe must ALWAYS reach a terminal state, even if the pipeline throws
-    # (network/SSL/timeout). Otherwise the pair is stuck in PROBING and can't be
-    # re-collected. On any failure we land on REJECTED_EMPTY and report it.
+    # A probe must ALWAYS reach a terminal state, even if the pipeline throws.
+    # Recover the state first, then preserve the failure for Celery/API callers.
     try:
         result = run_probe_pipeline(db, cid, kid)
     except SoftTimeLimitExceeded:
@@ -74,20 +72,16 @@ def run_probe(db: Session, cell_id: UUID, competitor_id: UUID) -> dict:
             str(cid),
             str(kid),
             CellState.REJECTED_EMPTY,
-            note="probe-now: soft time limit exceeded",
+            note="probe-cycle: soft time limit exceeded",
         )
         raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("probe pipeline failed for %s/%s: %s", cid, kid, exc)
-        snapshot = transition_state(
+        transition_state(
             db, str(cid), str(kid), CellState.REJECTED_EMPTY,
-            note=f"probe-now: pipeline error: {str(exc)[:120]}",
+            note=f"probe-cycle: pipeline error: {str(exc)[:120]}",
         )
-        return {
-            "cell_id": str(cid), "competitor_id": str(kid), "state": snapshot.status,
-            "probe_cycles": snapshot.probe_cycles, "candidates_found": 0,
-            "passed": 0, "persisted": 0, "error": str(exc)[:200],
-        }
+        raise
 
     log_scored_candidates(
         db, cid, kid, result.scored, probe_cycle=probing.probe_cycles
@@ -106,7 +100,7 @@ def run_probe(db: Session, cell_id: UUID, competitor_id: UUID) -> dict:
         if not has_live_evidence(db, cid, kid):
             snapshot = transition_state(
                 db, str(cid), str(kid), CellState.REJECTED_EMPTY,
-                note="probe-now: no passing evidence",
+                note="probe-cycle: no passing evidence",
             )
         persisted = 0
 
@@ -118,4 +112,5 @@ def run_probe(db: Session, cell_id: UUID, competitor_id: UUID) -> dict:
         "candidates_found": result.candidates_found,
         "passed": len(result.passed),
         "persisted": persisted,
+        "agentic_stats": result.agentic_stats,
     }

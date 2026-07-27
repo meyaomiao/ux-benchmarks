@@ -56,6 +56,12 @@ def test_probe_task_has_explicit_time_and_worker_guards():
     assert celery_app.conf.worker_prefetch_multiplier == 1
     assert celery_app.conf.task_acks_on_failure_or_timeout is True
     assert probe_cycle.run_probe_cycle.acks_on_failure_or_timeout is False
+    assert celery_app.conf.task_routes["app.workers.tasks.probe_cycle.*"] == {
+        "queue": "browser"
+    }
+    assert celery_app.amqp.router.route({}, probe_cycle.run_probe_cycle.name)["queue"].name == (
+        "browser"
+    )
 
 
 def test_hard_timeout_callback_does_not_ack_probe_task(monkeypatch):
@@ -166,6 +172,34 @@ def test_soft_timeout_finishes_probing(monkeypatch):
         (CellState.REJECTED_EMPTY, "probe-cycle: soft time limit exceeded")
     ]
     assert db.rollbacks == 1
+    assert db.closed is True
+
+
+def test_browser_queue_task_runs_probe_inline_without_nested_celery_wait(monkeypatch):
+    db, _snapshot, transitions = _wire_state(monkeypatch, CellState.QUEUED)
+    cell_id, competitor_id = uuid4(), uuid4()
+    calls = []
+
+    def probe(got_db, got_cell_id, got_competitor_id):
+        calls.append((got_db, got_cell_id, got_competitor_id))
+        return {
+            "candidates_found": 2,
+            "passed": 1,
+            "state": CellState.SHORTLIST_READY,
+        }
+
+    monkeypatch.setattr(probe_cycle, "run_probe", probe)
+
+    out = probe_cycle.run_probe_cycle.run(str(cell_id), str(competitor_id))
+
+    assert calls == [(db, cell_id, competitor_id)]
+    assert out == {
+        "status": "done",
+        "candidates_found": 2,
+        "passed": 1,
+        "state": CellState.SHORTLIST_READY,
+    }
+    assert transitions == []
     assert db.closed is True
 
 

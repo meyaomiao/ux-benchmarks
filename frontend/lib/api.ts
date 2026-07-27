@@ -355,7 +355,7 @@ export const api = {
     return res.json();
   },
 
-  // M3 · Run one probe synchronously, return result immediately (#5)
+  // M3 · Queue one browser-worker probe and wait for its result (#5)
   probeNow: async (cellId: string, competitorId: string): Promise<{
     state: string; candidates_found: number; passed: number; persisted: number;
   }> => {

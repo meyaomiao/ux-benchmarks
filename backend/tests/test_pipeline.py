@@ -4,12 +4,20 @@ The pipeline's two DB calls (build_query_bundle, get_mapping_card_by_cell) are
 monkeypatched so the fetch -> score -> keep-passers logic is exercised without a
 database, using fake adapter/scorer that satisfy the contracts Protocols.
 """
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from billiard.exceptions import SoftTimeLimitExceeded
 
 import app.services.m3_collection.pipeline as pipeline_mod
+from app.schemas.m3 import QueryBundle
+from app.services.m3_collection.adapters.agentic_site import AgenticSiteAdapter
+from app.services.m3_collection.agentic_site import (
+    ExploredPage,
+    ExplorerResult,
+    ExplorerStats,
+)
 from app.services.m3_collection.contracts import (
     Candidate,
     EvidenceType,
@@ -18,7 +26,6 @@ from app.services.m3_collection.contracts import (
     SourceType,
 )
 from app.services.m3_collection.pipeline import run_probe_pipeline
-from app.schemas.m3 import QueryBundle
 
 
 class _FakeAdapter:
@@ -233,3 +240,271 @@ def test_unavailable_abstraction_falls_back_to_domain_context(monkeypatch):
     )
     assert scorer.kwargs["intent_definition"] == _FakeCard.intent_definition
     assert scorer.kwargs["inclusion_criteria"] == _FakeCard.inclusion_criteria
+
+
+def test_agentic_failure_degrades_to_existing_adapter(monkeypatch):
+    _patch_db(monkeypatch)
+    monkeypatch.setattr(pipeline_mod.settings, "use_collection_mock", False)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "resolve_queries_to_urls",
+        lambda queries, **_kwargs: list(queries),
+    )
+
+    def fail_explorer(**_kwargs):
+        raise RuntimeError("browser launch failed")
+
+    agentic = AgenticSiteAdapter(
+        competitor_name="Acme",
+        intent="permissions",
+        official_domain="example.com",
+        help_center_domain="help.example.com",
+        explorer=fail_explorer,
+    )
+    result = run_probe_pipeline(
+        db=None,
+        cell_id=uuid4(),
+        competitor_id=uuid4(),
+        adapters=[agentic, _FakeAdapter(1)],
+        scorer=_FakeScorer(),
+    )
+
+    assert result.candidates_found == 1
+    assert len(result.scored) == 1
+    assert result.agentic_stats["stop_reason"] == "adapter_failure"
+
+
+def test_default_live_pipeline_wires_domains_and_keeps_all_existing_adapters(monkeypatch):
+    cell_id, competitor_id = uuid4(), uuid4()
+    created = {}
+    fetched = []
+    resolved_sources = []
+
+    class _Competitor:
+        canonical_name = "Acme"
+        competitor_type = "direct"
+        official_domain = "www.example.com"
+        help_center_domain = "help.example.com"
+
+    class _DB:
+        def execute(self, _stmt):
+            class _Result:
+                def scalar_one_or_none(self):
+                    return _Competitor()
+
+            return _Result()
+
+    class _AllPassScorer:
+        def score(self, candidate, **_kwargs):
+            return Score(
+                candidate_id=candidate.candidate_id,
+                score=0.9,
+                passed=True,
+                evidence_type=EvidenceType.OBSERVED,
+                rubric=RubricBreakdown(state_match=0.9),
+                reasoning="default adapter coverage",
+            )
+
+    class _RecordedAdapter:
+        uses_search_queries = True
+
+        def __init__(self, source_type):
+            self.source_type = source_type
+
+        def fetch(self, got_cell_id, got_competitor_id, queries, *, limit=10):
+            del limit
+            assert got_cell_id == cell_id
+            assert got_competitor_id == competitor_id
+            assert queries
+            fetched.append(self.source_type.value)
+            return [
+                Candidate(
+                    cell_id=cell_id,
+                    competitor_id=competitor_id,
+                    source_url=f"https://sources.example/{self.source_type.value}",
+                    source_type=self.source_type,
+                    text_content=self.source_type.value,
+                )
+            ]
+
+    class _Agentic:
+        source_type = SourceType.AGENTIC_SITE
+        uses_search_queries = False
+
+        def __init__(self, **kwargs):
+            created.update(kwargs)
+            self.last_stats = {"stop_reason": "not_run"}
+
+        def fetch(self, got_cell_id, got_competitor_id, queries, *, limit=10):
+            del got_cell_id, got_competitor_id, limit
+            assert queries == []
+            fetched.append(self.source_type.value)
+            self.last_stats = {"stop_reason": "adapter_failure"}
+            raise RuntimeError("agentic browser failed")
+
+    class _Help(_RecordedAdapter):
+        def __init__(self, **_kwargs):
+            super().__init__(SourceType.HELP_DOCS)
+
+    class _Interactive(_RecordedAdapter):
+        def __init__(self):
+            super().__init__(SourceType.INTERACTIVE_DEMO)
+
+    class _Web(_RecordedAdapter):
+        def __init__(self, source_type, **_kwargs):
+            super().__init__(source_type)
+
+    monkeypatch.setattr(pipeline_mod.settings, "use_collection_mock", False)
+    monkeypatch.setattr(
+        pipeline_mod,
+        "build_query_bundle",
+        lambda *_args: QueryBundle(
+            help_docs=["help query"],
+            interactive_demo=["demo query"],
+            community=["community query"],
+            generic=["generic query"],
+        ),
+    )
+    monkeypatch.setattr(pipeline_mod, "get_mapping_card_by_cell", lambda *_args: None)
+    monkeypatch.setattr(pipeline_mod, "AgenticSiteAdapter", _Agentic)
+    monkeypatch.setattr(pipeline_mod, "HelpDocsAdapter", _Help)
+    monkeypatch.setattr(pipeline_mod, "InteractiveDemoAdapter", _Interactive)
+    monkeypatch.setattr(pipeline_mod, "WebSourceAdapter", _Web)
+
+    def resolve(queries, **_kwargs):
+        resolved_sources.append(list(queries))
+        return [f"https://resolved.example/{len(resolved_sources)}"]
+
+    monkeypatch.setattr(pipeline_mod, "resolve_queries_to_urls", resolve)
+
+    result = run_probe_pipeline(
+        db=_DB(),
+        cell_id=cell_id,
+        competitor_id=competitor_id,
+        scorer=_AllPassScorer(),
+    )
+
+    assert created == {
+        "competitor_name": "Acme",
+        "intent": "",
+        "official_domain": "www.example.com",
+        "help_center_domain": "help.example.com",
+    }
+    assert fetched == [
+        "agentic_site",
+        "help_docs",
+        "interactive_demo",
+        "community",
+        "generic",
+    ]
+    assert resolved_sources == [
+        ["help query"],
+        ["demo query"],
+        ["community query"],
+        ["generic query"],
+    ]
+    assert result.candidates_found == 4
+    assert result.agentic_stats == {"stop_reason": "adapter_failure"}
+
+
+def test_agentic_image_candidate_enters_existing_scorer(monkeypatch, tmp_path):
+    _patch_db(monkeypatch)
+    monkeypatch.setattr(pipeline_mod.settings, "use_collection_mock", False)
+    image_path = tmp_path / "permission-review.png"
+    image_path.write_bytes(b"valid image fixture")
+
+    def explorer(**_kwargs):
+        return ExplorerResult(
+            pages=(
+                ExploredPage(
+                    source_url="https://example.com/permissions",
+                    title="Permission review",
+                    text_content="Rendered roles table and permission toggles",
+                    image_path=str(image_path),
+                ),
+            ),
+            stats=ExplorerStats(
+                steps=2,
+                pages_opened=2,
+                candidates_saved=1,
+                stop_reason="model_stop",
+            ),
+        )
+
+    class _VisionCaptureScorer:
+        def __init__(self):
+            self.candidates = []
+
+        def score(self, candidate, **_kwargs):
+            self.candidates.append(candidate)
+            assert candidate.image_path == str(image_path)
+            assert Path(candidate.image_path).read_bytes() == b"valid image fixture"
+            return Score(
+                candidate_id=candidate.candidate_id,
+                score=0.9,
+                passed=True,
+                evidence_type=EvidenceType.OBSERVED,
+                rubric=RubricBreakdown(state_match=0.9),
+                reasoning="vision candidate",
+            )
+
+    scorer = _VisionCaptureScorer()
+    agentic = AgenticSiteAdapter(
+        competitor_name="Acme",
+        intent="permissions",
+        official_domain="example.com",
+        help_center_domain=None,
+        explorer=explorer,
+    )
+    result = run_probe_pipeline(
+        db=None,
+        cell_id=uuid4(),
+        competitor_id=uuid4(),
+        adapters=[agentic],
+        scorer=scorer,
+    )
+
+    assert len(scorer.candidates) == 1
+    assert scorer.candidates[0].source_type == SourceType.AGENTIC_SITE
+    assert result.agentic_stats["candidates_saved"] == 1
+
+
+def test_cross_adapter_url_dedup_prefers_image_then_richer_text():
+    cell_id, competitor_id = uuid4(), uuid4()
+    text_only = Candidate(
+        cell_id=cell_id,
+        competitor_id=competitor_id,
+        source_url="https://EXAMPLE.com/permissions/#overview",
+        source_type=SourceType.HELP_DOCS,
+        text_content="long text " * 100,
+    )
+    image = Candidate(
+        cell_id=cell_id,
+        competitor_id=competitor_id,
+        source_url="https://example.com/permissions",
+        source_type=SourceType.AGENTIC_SITE,
+        text_content="short",
+        image_path="/tmp/permission.png",
+    )
+    richer_image = Candidate(
+        cell_id=cell_id,
+        competitor_id=competitor_id,
+        source_url="https://example.com/settings/",
+        source_type=SourceType.AGENTIC_SITE,
+        text_content="complete rendered settings page",
+        image_path="/tmp/settings-rich.png",
+    )
+    sparse_image = Candidate(
+        cell_id=cell_id,
+        competitor_id=competitor_id,
+        source_url="https://example.com/settings",
+        source_type=SourceType.INTERACTIVE_DEMO,
+        text_content="settings",
+        image_path="/tmp/settings-sparse.png",
+    )
+
+    deduped = pipeline_mod._dedupe_candidates(
+        [text_only, image, richer_image, sparse_image]
+    )
+
+    assert deduped == [image, richer_image]
