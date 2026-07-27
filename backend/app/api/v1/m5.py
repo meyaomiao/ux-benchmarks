@@ -1,13 +1,28 @@
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import select
+
 from app.core.database import get_db
 from app.core.deps import get_project_id
 from app.core.errors import AppError
+from app.models.m1_grid import GridCell
 from app.services.m3_collection.coverage_read import get_matrix, get_cell_coverage
 from app.services.m3_collection.coverage_recompute import recompute_coverage as _recompute
 
 router = APIRouter(prefix="/m5", tags=["M5 · Coverage Dashboard"])
+
+
+def _assert_cell_in_project(db: Session, cell_id: UUID, project_id: UUID) -> None:
+    """Reject a recompute request for a cell owned by another project.
+
+    Reported as NOT_FOUND so the error cannot be used to probe other projects.
+    """
+    owner = db.execute(
+        select(GridCell.project_id).where(GridCell.id == cell_id)
+    ).scalar_one_or_none()
+    if owner is None or owner != project_id:
+        raise AppError("NOT_FOUND", f"Cell {cell_id} not found", 404)
 
 
 # --- Coverage read (#27) -------------------------------------------------
@@ -24,9 +39,12 @@ async def get_coverage_matrix(
 
 @router.get("/coverage/{cell_id}/{competitor_id}")
 async def get_cell_coverage_endpoint(
-    cell_id: UUID, competitor_id: UUID, db: Session = Depends(get_db)
+    cell_id: UUID,
+    competitor_id: UUID,
+    db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
 ):
-    row = get_cell_coverage(db, cell_id, competitor_id)
+    row = get_cell_coverage(db, cell_id, competitor_id, project_id)
     if row is None:
         raise AppError("NOT_FOUND", f"No coverage for cell {cell_id} / competitor {competitor_id}", 404)
     return row
@@ -36,14 +54,20 @@ async def get_cell_coverage_endpoint(
 
 @router.post("/coverage/{cell_id}/{competitor_id}/recompute")
 async def recompute_coverage_endpoint(
-    cell_id: UUID, competitor_id: UUID, db: Session = Depends(get_db)
+    cell_id: UUID,
+    competitor_id: UUID,
+    db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
 ):
     """Recompute a cell's coverage snapshot from its persisted Assets.
 
     Drives state as far as SHORTLIST_READY; never SATURATED (human gate, #23/#24).
     """
+    _assert_cell_in_project(db, cell_id, project_id)
     snapshot = _recompute(db, cell_id, competitor_id)
-    return get_cell_coverage(db, cell_id, competitor_id) or {"status": snapshot.status}
+    return get_cell_coverage(db, cell_id, competitor_id, project_id) or {
+        "status": snapshot.status
+    }
 
 
 # --- Reports + Metrics (#29 #30) -------------------------------------------
@@ -72,13 +96,19 @@ async def list_reports():
 
 
 @router.post("/reports/generate")
-async def generate_report(db: Session = Depends(get_db)):
+async def generate_report(
+    db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
+):
     """Generate a structured coverage report (JSON + Markdown)."""
-    return generate_coverage_report(db)
+    return generate_coverage_report(db, project_id)
 
 
 @router.get("/reports/export.md", response_class=PlainTextResponse)
-async def export_report_markdown(db: Session = Depends(get_db)):
+async def export_report_markdown(
+    db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
+):
     """Download the coverage report as Markdown."""
-    report = generate_coverage_report(db)
+    report = generate_coverage_report(db, project_id)
     return report_to_markdown(report)

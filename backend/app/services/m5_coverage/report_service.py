@@ -4,6 +4,8 @@ Generates a structured markdown report of the current evidence collection state,
 covering search scope, product coverage, evidence quality, and unresolved gaps.
 """
 from datetime import datetime, timezone
+from uuid import UUID
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -14,53 +16,67 @@ from app.models.m4_annotation import Observation
 from app.models.m5_coverage import CoverageSnapshot
 
 
-def generate_coverage_report(db: Session) -> dict:
-    """Return a structured report dict (also rendered as Markdown)."""
+def generate_coverage_report(db: Session, project_id: UUID | None = None) -> dict:
+    """Return a structured report dict (also rendered as Markdown).
+
+    ``project_id`` scopes every underlying count so two projects never see the
+    same competitor list; None means unscoped (internal callers only).
+    """
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
+    def scoped(query, model):
+        return query if project_id is None else query.where(model.project_id == project_id)
+
     # Competitors
-    competitors = list(db.execute(select(CompetitorEntity).where(
+    competitors = list(db.execute(scoped(select(CompetitorEntity).where(
         CompetitorEntity.status.in_(["confirmed", "pending"])
-    )).scalars().all())
+    ), CompetitorEntity)).scalars().all())
     confirmed = [c for c in competitors if c.status == "confirmed"]
     pending = [c for c in competitors if c.status == "pending"]
 
     # Grid cells
-    cells = list(db.execute(select(GridCell).where(GridCell.status == "active")).scalars().all())
+    cells = list(db.execute(scoped(
+        select(GridCell).where(GridCell.status == "active"), GridCell
+    )).scalars().all())
     jtbd_list = list({c.jtbd for c in cells})
 
     # Coverage snapshots
     snap_counts: dict[str, int] = {}
-    rows = db.execute(
-        select(CoverageSnapshot.status, func.count(CoverageSnapshot.id))
-        .group_by(CoverageSnapshot.status)
-    ).all()
+    rows = db.execute(scoped(
+        select(CoverageSnapshot.status, func.count(CoverageSnapshot.id)),
+        CoverageSnapshot,
+    ).group_by(CoverageSnapshot.status)).all()
     for status, count in rows:
         snap_counts[status] = count
     total_pairs = sum(snap_counts.values())
 
     # Evidence
-    total_assets = db.scalar(
-        select(func.count(Asset.id)).where(Asset.is_superseded == False)  # noqa: E712
-    ) or 0
-    observed_assets = db.scalar(
+    total_assets = db.scalar(scoped(
+        select(func.count(Asset.id)).where(Asset.is_superseded == False),  # noqa: E712
+        Asset,
+    )) or 0
+    observed_assets = db.scalar(scoped(
         select(func.count(Asset.id)).where(
             Asset.is_superseded == False,  # noqa: E712
             Asset.evidence_type == "observed",
-        )
-    ) or 0
-    claimed_assets = db.scalar(
+        ),
+        Asset,
+    )) or 0
+    claimed_assets = db.scalar(scoped(
         select(func.count(Asset.id)).where(
             Asset.is_superseded == False,  # noqa: E712
             Asset.evidence_type == "claimed",
-        )
-    ) or 0
-    total_observations = db.scalar(select(func.count(Observation.id))) or 0
+        ),
+        Asset,
+    )) or 0
+    total_observations = db.scalar(scoped(
+        select(func.count(Observation.id)), Observation
+    )) or 0
 
     # Unresolved items
-    missing_mapping = db.scalar(
-        select(func.count(GridCell.id)).where(GridCell.status == "active")
-    ) or 0  # simplified — full check needs join with MappingCard
+    missing_mapping = db.scalar(scoped(
+        select(func.count(GridCell.id)).where(GridCell.status == "active"), GridCell
+    )) or 0  # simplified — full check needs join with MappingCard
     walled_pairs = snap_counts.get("REJECTED_EMPTY", 0)
 
     report = {

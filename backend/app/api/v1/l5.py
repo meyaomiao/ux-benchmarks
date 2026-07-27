@@ -41,13 +41,21 @@ async def list_reports(
 
 
 @router.get("/{report_id}", response_model=ReportRead)
-async def get_report(report_id: UUID, db: Session = Depends(get_db)):
-    obj = report_service.get_report(db, report_id)
+async def get_report(
+    report_id: UUID,
+    db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
+):
+    obj = report_service.get_report(db, report_id, project_id)
     if not obj:
         raise AppError("NOT_FOUND", f"Report {report_id} not found", 404)
     return obj
 
 
 @router.delete("/{report_id}", status_code=204)
-async def delete_report(report_id: UUID, db: Session = Depends(get_db)):
-    report_service.delete_report(db, report_id)
+async def delete_report(
+    report_id: UUID,
+    db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
+):
+    report_service.delete_report(db, report_id, project_id)

@@ -81,14 +81,33 @@ def list_insights(
     return list(db.execute(q).scalars().all())
 
 
-def get_insight(db: Session, insight_id: UUID) -> Insight | None:
-    return db.get(Insight, insight_id)
+def _load_scoped_insight(
+    db: Session, insight_id: UUID, project_id: Optional[UUID]
+) -> Insight:
+    """Fetch an Insight, refusing cross-project access.
 
-
-def update_insight(db: Session, insight_id: UUID, data: dict) -> Insight:
+    Reported as NOT_FOUND rather than FORBIDDEN so the error cannot be used to
+    probe which insight ids exist in other projects.
+    """
     insight = db.get(Insight, insight_id)
-    if not insight:
+    if insight is None or (project_id is not None and insight.project_id != project_id):
         raise AppError("NOT_FOUND", f"Insight {insight_id} not found", 404)
+    return insight
+
+
+def get_insight(
+    db: Session, insight_id: UUID, project_id: Optional[UUID] = None
+) -> Insight | None:
+    insight = db.get(Insight, insight_id)
+    if insight is None or (project_id is not None and insight.project_id != project_id):
+        return None
+    return insight
+
+
+def update_insight(
+    db: Session, insight_id: UUID, data: dict, project_id: Optional[UUID] = None
+) -> Insight:
+    insight = _load_scoped_insight(db, insight_id, project_id)
     for k, v in data.items():
         if v is not None and hasattr(insight, k):
             setattr(insight, k, v)
@@ -97,21 +116,35 @@ def update_insight(db: Session, insight_id: UUID, data: dict) -> Insight:
     return insight
 
 
-def delete_insight(db: Session, insight_id: UUID) -> bool:
-    insight = db.get(Insight, insight_id)
-    if not insight:
-        raise AppError("NOT_FOUND", f"Insight {insight_id} not found", 404)
+def delete_insight(
+    db: Session, insight_id: UUID, project_id: Optional[UUID] = None
+) -> bool:
+    insight = _load_scoped_insight(db, insight_id, project_id)
     db.delete(insight)
     db.commit()
     return True
 
 
-def generate_insight(db: Session, cell_id: UUID, competitor_id: UUID) -> Insight:
+def generate_insight(
+    db: Session,
+    cell_id: UUID,
+    competitor_id: UUID,
+    project_id: Optional[UUID] = None,
+) -> Insight:
     """Generate a draft insight from accepted evidence for (cell, competitor).
 
     Uses Claude when a key is configured and mock mode is off; otherwise returns
     a deterministic Chinese mock insight so the UI is fully functional offline.
     """
+    if project_id is not None:
+        from app.models.m1_grid import GridCell
+
+        cell_project_id = db.execute(
+            select(GridCell.project_id).where(GridCell.id == cell_id)
+        ).scalar_one_or_none()
+        if cell_project_id is None or cell_project_id != project_id:
+            raise AppError("NOT_FOUND", f"Cell {cell_id} not found", 404)
+
     use_mock = settings.use_collection_mock or not settings.anthropic_api_key
 
     # Load context: mapping card + accepted observations + competitor name.
