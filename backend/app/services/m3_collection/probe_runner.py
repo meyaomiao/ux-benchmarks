@@ -62,9 +62,8 @@ def run_probe(db: Session, cell_id: UUID, competitor_id: UUID) -> dict:
         db, str(cid), str(kid), CellState.PROBING, note="probe-cycle"
     )
 
-    # A probe must ALWAYS reach a terminal state, even if the pipeline throws
-    # (network/SSL/timeout). Otherwise the pair is stuck in PROBING and can't be
-    # re-collected. On any failure we land on REJECTED_EMPTY and report it.
+    # A probe must ALWAYS reach a terminal state, even if the pipeline throws.
+    # Recover the state first, then preserve the failure for Celery/API callers.
     try:
         result = run_probe_pipeline(db, cid, kid)
     except SoftTimeLimitExceeded:
@@ -78,15 +77,11 @@ def run_probe(db: Session, cell_id: UUID, competitor_id: UUID) -> dict:
         raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("probe pipeline failed for %s/%s: %s", cid, kid, exc)
-        snapshot = transition_state(
+        transition_state(
             db, str(cid), str(kid), CellState.REJECTED_EMPTY,
             note=f"probe-cycle: pipeline error: {str(exc)[:120]}",
         )
-        return {
-            "cell_id": str(cid), "competitor_id": str(kid), "state": snapshot.status,
-            "probe_cycles": snapshot.probe_cycles, "candidates_found": 0,
-            "passed": 0, "persisted": 0, "error": str(exc)[:200],
-        }
+        raise
 
     log_scored_candidates(
         db, cid, kid, result.scored, probe_cycle=probing.probe_cycles
