@@ -1,25 +1,35 @@
-"""Shared web content fetcher — download a URL and extract its MAIN text.
+"""Shared web content fetcher for live M3 candidates.
 
-Used by every live adapter so they get real article/doc body instead of nav +
-footer noise (which scored ~0 and was the root cause of empty collection).
+The first bounded set of URLs is rendered in Chromium so SPA content and real
+product UI reach the vision scorer. Browser failures, non-HTML responses and
+near-blank screenshots fall back to the existing httpx/trafilatura path. URLs
+beyond the render budget remain HTTP-only.
 
-Strategy:
-  1. httpx GET (12s, one retry, browser-ish UA) — many doc/community sites 403
-     a default client.
-  2. trafilatura.extract() — pulls the main content, strips nav/footer/ads/
-     comments. Best-in-class boilerplate removal.
-  3. BeautifulSoup fallback — if trafilatura yields nothing (rare / odd markup),
-     grab <main>/<article>/<body> text as a last resort.
-
-Returns (title, text) or None when nothing usable came back (e.g. SPA shell,
-binary, blocked). Never raises for normal failures.
+Normal network/browser failures never escape. Celery's SoftTimeLimitExceeded is
+always re-raised so the task-level timeout handling remains authoritative.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 from billiard.exceptions import SoftTimeLimitExceeded
+
+from app.core.config import settings
+from app.services.m3_collection.adapters.interactive_demo import (
+    _BROWSER_LAUNCH_TIMEOUT_MS,
+    _GOTO_TIMEOUT_MS,
+    _MIN_USEFUL_PNG_BYTES,
+    _RESCORE_VIEWPORT,
+    _close_playwright_resource,
+    _configure_page_timeouts,
+    _dismiss_consent,
+    _wait_for_page_settle,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +40,35 @@ _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"
 )
+
+# Rendering is intentionally narrow: the three eligible live adapters each get
+# at most two attempts, and the default pipeline shares a six-attempt budget.
+DEFAULT_RENDER_LIMIT_PER_ADAPTER = 2
+DEFAULT_RENDER_LIMIT_PER_PROBE = 6
+
+
+@dataclass(frozen=True)
+class FetchedPage:
+    """Usable page content returned to a candidate adapter."""
+
+    title: str
+    text_content: str
+    image_path: str | None = None
+
+
+@dataclass
+class RenderBudget:
+    """Shared per-probe cap counted by browser attempts, not successes."""
+
+    remaining: int
+
+    def __post_init__(self) -> None:
+        self.remaining = max(0, self.remaining)
+
+    def reserve(self, requested: int) -> int:
+        granted = min(max(0, requested), self.remaining)
+        self.remaining -= granted
+        return granted
 
 
 def _http_get(url: str) -> Optional[str]:
@@ -148,4 +187,126 @@ def fetch_many(urls: list[str], max_workers: int = 8) -> dict[str, tuple[str, st
                 got = None
             if got:
                 out[url] = got
+    return out
+
+
+def _dedupe_urls(urls: list[str]) -> list[str]:
+    """Return non-empty URLs once, preserving search rank."""
+    return list(dict.fromkeys(url.strip() for url in urls if url.strip()))
+
+
+def _is_html_response(response) -> bool:
+    """Treat a missing content type as renderable, but reject known binaries."""
+    if response is None:
+        return True
+    headers = getattr(response, "headers", {}) or {}
+    content_type = headers.get("content-type", "").lower()
+    return not content_type or "html" in content_type
+
+
+def _rendered_main_text(page) -> str:
+    """Read the best available DOM main region after client-side rendering."""
+    text = page.evaluate(
+        """() => {
+            const root = document.querySelector("main, article, [role='main']")
+                || document.body;
+            return root ? (root.innerText || "") : "";
+        }"""
+    )
+    return " ".join(str(text or "").split())[:_MAX_CHARS]
+
+
+def _render_many(urls: list[str]) -> dict[str, FetchedPage]:
+    """Render URLs in one browser session; omit failures for HTTP fallback."""
+    if not urls:
+        return {}
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        logger.warning("Playwright unavailable; using HTTP candidate fetch")
+        return {}
+
+    out: dict[str, FetchedPage] = {}
+    try:
+        shot_dir = Path(settings.assets_dir) / "candidate_pages"
+        shot_dir.mkdir(parents=True, exist_ok=True)
+        with sync_playwright() as pw:
+            browser = None
+            try:
+                browser = pw.chromium.launch(
+                    headless=True, timeout=_BROWSER_LAUNCH_TIMEOUT_MS
+                )
+                for url in urls:
+                    page = browser.new_page(viewport=_RESCORE_VIEWPORT)
+                    _configure_page_timeouts(page)
+                    fpath: Path | None = None
+                    try:
+                        response = page.goto(
+                            url,
+                            wait_until="domcontentloaded",
+                            timeout=_GOTO_TIMEOUT_MS,
+                        )
+                        if not _is_html_response(response):
+                            logger.info("candidate render is non-HTML for %s", url)
+                            continue
+                        _dismiss_consent(page)
+                        _wait_for_page_settle(page)
+
+                        title = (page.title() or url).strip()[:200]
+                        text = _rendered_main_text(page)
+                        digest = hashlib.sha256(url.encode()).hexdigest()[:12]
+                        fpath = shot_dir / f"{digest}_{uuid4().hex[:12]}.png"
+                        page.screenshot(path=str(fpath), full_page=True)
+                        if fpath.stat().st_size < _MIN_USEFUL_PNG_BYTES:
+                            logger.info("candidate screenshot too empty for %s", url)
+                            fpath.unlink(missing_ok=True)
+                            continue
+
+                        out[url] = FetchedPage(
+                            title=title or url,
+                            text_content=text or title or url,
+                            image_path=str(fpath),
+                        )
+                    except SoftTimeLimitExceeded:
+                        raise
+                    except Exception as exc:  # noqa: BLE001 — per-URL fallback
+                        if fpath is not None:
+                            fpath.unlink(missing_ok=True)
+                        logger.warning("candidate render failed for %s: %s", url, exc)
+                    finally:
+                        _close_playwright_resource(page, "page")
+            finally:
+                if browser is not None:
+                    _close_playwright_resource(browser, "browser")
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception as exc:  # noqa: BLE001 — launch/context failure falls back
+        logger.warning("candidate browser unavailable; using HTTP fetch: %s", exc)
+        return out
+
+    return out
+
+
+def fetch_candidate_pages(
+    urls: list[str],
+    *,
+    render_limit: int = DEFAULT_RENDER_LIMIT_PER_ADAPTER,
+    max_workers: int = 8,
+) -> dict[str, FetchedPage]:
+    """Fetch deduplicated URLs in rank order with browser-to-HTTP fallback."""
+    unique_urls = _dedupe_urls(urls)
+    if not unique_urls:
+        return {}
+
+    rendered = _render_many(unique_urls[: max(0, render_limit)])
+    fallback_urls = [url for url in unique_urls if url not in rendered]
+    fetched = fetch_many(fallback_urls, max_workers=max_workers)
+
+    out: dict[str, FetchedPage] = {}
+    for url in unique_urls:
+        if url in rendered:
+            out[url] = rendered[url]
+        elif url in fetched:
+            title, text = fetched[url]
+            out[url] = FetchedPage(title=title, text_content=text)
     return out

@@ -9,13 +9,12 @@ Two modes, selected by `settings.use_collection_mock`:
   * mock (default ON): `_mock_fetch` synthesises 2-3 deterministic fixture
     Candidates from the queries with NO network access, so the whole collection
     chain can run offline / in CI.
-  * live (flag OFF): `_live_fetch` uses httpx + BeautifulSoup to fetch and parse
-    real help pages.
+  * live (flag OFF): `_live_fetch` renders a bounded URL set with Playwright and
+    falls back to httpx/trafilatura for failures and the remaining URLs.
 
-Screenshots: real screenshotting needs a browser (Playwright) and is out of
-scope for this issue — that belongs to #18. Here we always set
-`image_path=None` and rely on `text_content`; help docs are text-rich, so the
-scorer has enough to work with from text alone.
+In live mode, a bounded first set of URLs is rendered with Playwright and keeps
+both DOM text and a full-page screenshot. Browser failures retain the previous
+httpx/trafilatura candidate through the shared fallback fetcher.
 
 Rights: help docs are third-party official material, so `rights_status` is
 always "third_party_official".
@@ -33,8 +32,12 @@ from uuid import UUID
 
 from app.core.config import settings
 
+from ..content_fetch import (
+    DEFAULT_RENDER_LIMIT_PER_ADAPTER,
+    RenderBudget,
+    fetch_candidate_pages,
+)
 from ..contracts import Candidate, EvidenceType, SourceType
-from ..content_fetch import fetch_many
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +89,15 @@ class HelpDocsAdapter:
     """
 
     source_type: SourceType = SourceType.HELP_DOCS
+
+    def __init__(
+        self,
+        *,
+        render_limit: int = DEFAULT_RENDER_LIMIT_PER_ADAPTER,
+        render_budget: RenderBudget | None = None,
+    ) -> None:
+        self._render_limit = max(0, render_limit)
+        self._render_budget = render_budget
 
     def fetch(
         self,
@@ -177,33 +189,31 @@ class HelpDocsAdapter:
         *,
         limit: int,
     ) -> list[Candidate]:
-        """Fetch + parse real help pages with httpx + BeautifulSoup.
+        """Render a bounded set of real help pages with HTTP fallback.
 
         One fetch per query URL — no recursive crawling. Queries that are not
         http(s) URLs are skipped: this adapter does not integrate a search
-        engine, so it cannot turn a search string (e.g. "site:help.* setup")
-        into a page. Real search integration is out of scope for #17; upstream
-        query expansion produces search operators, not URLs, so in practice
-        live mode is only useful when callers pass concrete doc URLs.
+        engine itself, so it cannot turn a search string (e.g. "site:help.*
+        setup") into a page. The pipeline resolves those strings before calling
+        this adapter.
 
         Network / parse errors are logged and skipped; the method returns
         whatever succeeded (possibly []).
         """
-        # Concurrent main-content fetch: trafilatura extracts real doc body
-        # (nav/footer stripped, 12s + retry), fetch_many runs all URLs in a
-        # thread pool. Fixes both the nav-text-to-scorer bug and serial slowness.
+        # Deduplicate before applying the candidate and render budgets so repeat
+        # search hits do not consume browser attempts or crowd out later URLs.
         candidates: list[Candidate] = []
-        urls = [q.strip() for q in queries if _looks_like_url(q)][: max(limit * 2, limit)]
-        fetched = fetch_many(urls)  # {url: (title, text)}
+        urls = list(dict.fromkeys(q.strip() for q in queries if _looks_like_url(q)))
+        urls = urls[: max(limit * 2, limit)]
+        render_limit = min(self._render_limit, limit, len(urls))
+        if self._render_budget is not None:
+            render_limit = self._render_budget.reserve(render_limit)
+        fetched = fetch_candidate_pages(urls, render_limit=render_limit)
 
-        for url in urls:  # preserve search-rank order
+        for url, got in fetched.items():  # fetcher preserves search-rank order
             if len(candidates) >= limit:
                 break
-            got = fetched.get(url)
-            if not got:
-                continue  # SPA shell / binary / blocked — no usable text
-
-            title, text = got
+            title, text = got.title, got.text_content
             candidates.append(
                 Candidate(
                     cell_id=cell_id,
@@ -213,7 +223,7 @@ class HelpDocsAdapter:
                     title=title,
                     snippet=text[:_SNIPPET_CHARS],
                     text_content=text,
-                    image_path=None,  # no screenshots in this adapter (see #18)
+                    image_path=got.image_path,
                     product_version=None,
                     rights_status="third_party_official",
                     evidence_type_hint=_classify_evidence(text),
