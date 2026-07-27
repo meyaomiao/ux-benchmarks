@@ -121,15 +121,36 @@ def test_official_buckets_anchor_to_competitor_domain():
         assert "site:notion.so" in q
         assert "version history compare" in q
         assert "版本历史" not in q
-    # interactive_demo has some competitor-less fallbacks, but the competitor-named
-    # ones are anchored.
-    named_demo = [q for q in bundle.interactive_demo if "Notion" in q]
-    assert named_demo
-    for q in named_demo:
+    # With a competitor known, EVERY interactive_demo query is competitor-named
+    # and anchored — an un-anchored demo query searches the whole web.
+    assert bundle.interactive_demo
+    for q in bundle.interactive_demo:
+        assert "Notion" in q
         assert "site:notion.so" in q
     # Community stays third-party: never anchored to the competitor's own domain.
     for q in bundle.community:
         assert "site:notion.so" not in q
+
+
+def test_interactive_demo_never_unanchored_with_competitor():
+    """Regression (#75): interactive_demo used to emit a competitor-less
+    `{phrase} interactive demo` query FIRST, which searched the whole web and
+    filled the bucket with other vendors' pages. Those get screenshotted (a page
+    load + a vision call each) and then fail PRODUCT_MATCH_GATE, so they were
+    pure wasted budget. Mirrors help_docs: anchored whenever a competitor exists."""
+    bundle = expand_terms_for_cell(
+        jtbd="upload contract and trigger AI risk scan",
+        journey_stage="daily use",
+        page_state="风险扫描结果页",
+        lexicon_terms=[],
+        competitor_names=["Adobe Acrobat"],
+        official_phrase="contract risk scan results",
+        competitor_domains={"Adobe Acrobat": ("helpx.adobe.com", "adobe.com")},
+    )
+    assert bundle.interactive_demo
+    for q in bundle.interactive_demo:
+        assert "site:adobe.com" in q, q
+        assert "Adobe Acrobat" in q, q
 
 
 def test_official_buckets_degrade_without_domains():
