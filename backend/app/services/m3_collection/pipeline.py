@@ -18,7 +18,7 @@ that inject a single fake.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -26,17 +26,49 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.services.m2_mapping.mapping_service import get_mapping_card_by_cell
 from app.services.m3_collection.adapters.help_docs import HelpDocsAdapter
-from app.services.m3_collection.adapters.interactive_demo import InteractiveDemoAdapter
+from app.services.m3_collection.adapters.interactive_demo import (
+    InteractiveDemoAdapter,
+    capture_page_screenshots,
+)
 from app.services.m3_collection.adapters.web_source import WebSourceAdapter
-from app.services.m3_collection.contracts import Adapter, Candidate, Score, Scorer, SourceType
+from app.services.m3_collection.contracts import (
+    RELEVANCE_FLOOR,
+    Adapter,
+    Candidate,
+    Score,
+    Scorer,
+    SourceType,
+)
 from app.services.m3_collection.interaction_pattern import (
     abstract_interaction_pattern,
     abstracted_intent,
     needs_abstraction,
 )
 from app.services.m3_collection.query_expansion import build_query_bundle
-from app.services.m3_collection.scoring.relevance_scorer import RelevanceScorer
+from app.services.m3_collection.scoring.relevance_scorer import (
+    PRODUCT_MATCH_GATE,
+    RelevanceScorer,
+)
 from app.services.m3_collection.search_service import resolve_queries_to_urls
+
+# Official buckets must stay on the competitor's own domain — see
+# resolve_queries_to_urls(allow_unanchored_fallback=...).
+_OFFICIAL_BUCKETS = {SourceType.HELP_DOCS, SourceType.INTERACTIVE_DEMO}
+
+# Near-threshold rescore window. A text candidate scoring within this much of
+# the floor is one missing screenshot away from passing: text-only candidates
+# are structurally capped on fidelity + evidence_directness (0.10 + 0.20 of the
+# weight), so the gap is an artefact of having no image, not of being irrelevant.
+_RESCORE_BAND = 0.12
+
+# Only rescore candidates the scorer already reads as the RIGHT product. Below
+# the gate a screenshot cannot rescue the candidate anyway, so capturing one
+# would just burn browser time and a vision call.
+_RESCORE_MIN_PRODUCT_MATCH = PRODUCT_MATCH_GATE
+
+# Cap on how many candidates one probe will re-screenshot. Each costs a page
+# load plus a vision call, so this bounds the added latency per probe.
+_RESCORE_MAX = 4
 
 
 @dataclass
@@ -103,7 +135,11 @@ def run_probe_pipeline(
         queries = getattr(bundle, adp.source_type.value, []) or bundle.generic
         if not settings.use_collection_mock:
             # Resolve search-operator strings (e.g. "site:help.* setup") to URLs.
-            queries = resolve_queries_to_urls(queries, max_total=per_bucket_limit * 2)
+            queries = resolve_queries_to_urls(
+                queries,
+                max_total=per_bucket_limit * 2,
+                allow_unanchored_fallback=adp.source_type not in _OFFICIAL_BUCKETS,
+            )
         try:
             found = adp.fetch(cell_id, competitor_id, queries, limit=per_bucket_limit)
             all_candidates.extend(found)
@@ -195,6 +231,16 @@ def run_probe_pipeline(
                 if score.passed:
                     passed.append((cand, score))
 
+        # 4b. Near-threshold rescore: screenshot the right-product text
+        # candidates that died just under the floor, then score them again in
+        # image mode. Both scores stay in `scored`, so the diagnostics log keeps
+        # the full audit trail of why a candidate ended up where it did.
+        rescored = _rescore_near_threshold(scored, _score_one)
+        for cand, score in rescored:
+            scored.append((cand, score))
+            if score.passed:
+                passed.append((cand, score))
+
     # Highest score first — image candidates tend to rank higher (TEXT_ONLY_CEILING).
     passed.sort(key=lambda cs: cs[1].score, reverse=True)
 
@@ -205,3 +251,55 @@ def run_probe_pipeline(
         scored=scored,
         passed=passed,
     )
+
+
+def _rescore_near_threshold(
+    scored: list[tuple[Candidate, Score]],
+    score_one,
+) -> list[tuple[Candidate, Score]]:
+    """Screenshot near-miss text candidates and re-score them in image mode.
+
+    A candidate qualifies when it has no image, did not pass, already reads as
+    the target product (``product_match >= _RESCORE_MIN_PRODUCT_MATCH``), and
+    landed within ``_RESCORE_BAND`` of the floor. Those are exactly the ones
+    whose only deficit is "no screenshot".
+
+    Returns the new (candidate, score) pairs — the originals are left untouched.
+    Best-effort: any failure yields an empty list rather than breaking the probe.
+    """
+    near_misses = [
+        cand for cand, score in scored
+        if cand.image_path is None
+        and not score.passed
+        and score.rubric.product_match >= _RESCORE_MIN_PRODUCT_MATCH
+        and RELEVANCE_FLOOR - _RESCORE_BAND <= score.score < RELEVANCE_FLOOR
+    ]
+    if not near_misses:
+        return []
+
+    # Highest first, so the budget goes to the closest misses.
+    by_score = {cand.candidate_id: score.score for cand, score in scored}
+    near_misses.sort(key=lambda c: by_score[c.candidate_id], reverse=True)
+    near_misses = near_misses[:_RESCORE_MAX]
+
+    try:
+        shots = capture_page_screenshots([c.source_url for c in near_misses])
+    except Exception as exc:  # noqa: BLE001 — rescore is an upgrade, not a duty
+        import logging
+        logging.getLogger(__name__).warning("near-threshold capture failed: %s", exc)
+        return []
+
+    with_images = [
+        replace(cand, image_path=shots[cand.source_url])
+        for cand in near_misses
+        if cand.source_url in shots
+    ]
+    if not with_images:
+        return []
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    out: list[tuple[Candidate, Score]] = []
+    with ThreadPoolExecutor(max_workers=min(8, len(with_images))) as pool:
+        out.extend(pool.map(score_one, with_images))
+    return out
