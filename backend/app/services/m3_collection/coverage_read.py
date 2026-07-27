@@ -37,17 +37,20 @@ def get_matrix(
 
 
 def get_cell_coverage(
-    db: Session, cell_id: UUID, competitor_id: UUID
+    db: Session, cell_id: UUID, competitor_id: UUID, project_id: UUID | None = None
 ) -> dict | None:
-    """Return the single snapshot for (cell, competitor) as a dict, or None."""
-    snapshot = (
-        db.query(CoverageSnapshot)
-        .filter(
-            CoverageSnapshot.cell_id == cell_id,
-            CoverageSnapshot.competitor_id == competitor_id,
-        )
-        .one_or_none()
+    """Return the single snapshot for (cell, competitor) as a dict, or None.
+
+    ``project_id`` scopes the lookup so one project cannot read another's
+    snapshot; None means unscoped (internal callers only).
+    """
+    query = db.query(CoverageSnapshot).filter(
+        CoverageSnapshot.cell_id == cell_id,
+        CoverageSnapshot.competitor_id == competitor_id,
     )
+    if project_id is not None:
+        query = query.filter(CoverageSnapshot.project_id == project_id)
+    snapshot = query.one_or_none()
     if snapshot is None:
         return None
     return _to_dict(snapshot)

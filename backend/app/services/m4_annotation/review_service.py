@@ -71,12 +71,16 @@ def get_shortlist(
     db: Session,
     cell_id: UUID,
     competitor_id: UUID,
+    project_id: UUID | None = None,
 ) -> list[Asset]:
     """Return non-superseded Assets for (cell, competitor), ordered by ai_score desc.
 
     These are the items waiting for human review.  Superseded assets (already
     rejected or replaced by a newer version) are excluded so the reviewer only
     sees actionable candidates.
+
+    ``project_id`` scopes the result so one project's reviewer can never see
+    another project's evidence.  None means unscoped (internal callers only).
     """
     query = (
         select(Asset)
@@ -87,7 +91,25 @@ def get_shortlist(
         )
         .order_by(Asset.ai_score.desc().nullslast())
     )
+    if project_id is not None:
+        query = query.where(Asset.project_id == project_id)
     return list(db.execute(query).scalars().all())
+
+
+def _load_scoped_asset(
+    db: Session,
+    asset_id: UUID,
+    project_id: UUID | None,
+) -> Asset:
+    """Fetch an Asset, refusing cross-project access.
+
+    A wrong-project asset is reported as NOT_FOUND rather than FORBIDDEN so the
+    caller cannot use the error to probe which ids exist in other projects.
+    """
+    asset: Asset | None = db.get(Asset, asset_id)
+    if asset is None or (project_id is not None and asset.project_id != project_id):
+        raise AppError("NOT_FOUND", f"Asset {asset_id} not found", 404)
+    return asset
 
 
 def accept_asset(
@@ -95,6 +117,7 @@ def accept_asset(
     asset_id: UUID,
     observation_fields: dict,
     accepted_by: str = "reviewer",
+    project_id: UUID | None = None,
 ) -> Observation:
     """Promote an Asset to a human-accepted Observation in the evidence library.
 
@@ -124,10 +147,11 @@ def accept_asset(
         the caller also passes them in ``observation_fields``.
     accepted_by:
         Identity of the reviewer performing the accept action.
+    project_id:
+        When given, the Asset must belong to this project or the call raises
+        NOT_FOUND.
     """
-    asset: Asset | None = db.get(Asset, asset_id)
-    if asset is None:
-        raise AppError("NOT_FOUND", f"Asset {asset_id} not found", 404)
+    asset = _load_scoped_asset(db, asset_id, project_id)
 
     obs = Observation(
         project_id=asset.project_id,
@@ -171,6 +195,7 @@ def reject_asset(
     db: Session,
     asset_id: UUID,
     reason: Optional[str] = None,
+    project_id: UUID | None = None,
 ) -> Asset:
     """Soft-remove an Asset from the shortlist by marking it superseded.
 
@@ -186,10 +211,11 @@ def reject_asset(
         PK of the Asset to reject.
     reason:
         Optional human-readable rejection reason (logged at INFO level).
+    project_id:
+        When given, the Asset must belong to this project or the call raises
+        NOT_FOUND.
     """
-    asset: Asset | None = db.get(Asset, asset_id)
-    if asset is None:
-        raise AppError("NOT_FOUND", f"Asset {asset_id} not found", 404)
+    asset = _load_scoped_asset(db, asset_id, project_id)
 
     if reason:
         logger.info("reject_asset asset_id=%s reason=%r", asset_id, reason)
@@ -204,6 +230,7 @@ def flag_asset(
     db: Session,
     asset_id: UUID,
     note: Optional[str] = None,
+    project_id: UUID | None = None,
 ) -> Asset:
     """Flag an Asset for follow-up (placeholder — real flag queue is out of scope).
 
@@ -224,10 +251,11 @@ def flag_asset(
         PK of the Asset to flag.
     note:
         Optional reviewer note explaining why the asset was flagged.
+    project_id:
+        When given, the Asset must belong to this project or the call raises
+        NOT_FOUND.
     """
-    asset: Asset | None = db.get(Asset, asset_id)
-    if asset is None:
-        raise AppError("NOT_FOUND", f"Asset {asset_id} not found", 404)
+    asset = _load_scoped_asset(db, asset_id, project_id)
 
     logger.warning(
         "flag_asset asset_id=%s note=%r — flagged for follow-up (placeholder behaviour)",

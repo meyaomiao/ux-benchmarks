@@ -200,13 +200,20 @@ def list_reports(db: Session, project_id: Optional[UUID] = None) -> list[Report]
     return list(db.execute(q.order_by(Report.created_at.desc())).scalars().all())
 
 
-def get_report(db: Session, report_id: UUID) -> Report | None:
-    return db.get(Report, report_id)
-
-
-def delete_report(db: Session, report_id: UUID) -> bool:
+def get_report(
+    db: Session, report_id: UUID, project_id: Optional[UUID] = None
+) -> Report | None:
     report = db.get(Report, report_id)
-    if not report:
+    if report is None or (project_id is not None and report.project_id != project_id):
+        return None
+    return report
+
+
+def delete_report(
+    db: Session, report_id: UUID, project_id: Optional[UUID] = None
+) -> bool:
+    report = db.get(Report, report_id)
+    if report is None or (project_id is not None and report.project_id != project_id):
         raise AppError("NOT_FOUND", f"Report {report_id} not found", 404)
     db.delete(report)
     db.commit()
