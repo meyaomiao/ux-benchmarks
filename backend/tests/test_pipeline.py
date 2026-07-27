@@ -104,3 +104,112 @@ def test_pipeline_passers_sorted_desc(monkeypatch):
     )
     scores = [s.score for _, s in result.passed]
     assert scores == sorted(scores, reverse=True)
+
+
+class _CaptureScorer:
+    """Records the scoring context handed to the scorer."""
+
+    def __init__(self):
+        self.kwargs = None
+
+    def score(self, candidate, **kwargs):
+        self.kwargs = kwargs
+        return Score(
+            candidate_id=candidate.candidate_id,
+            score=0.9, passed=True,
+            evidence_type=EvidenceType.OBSERVED,
+            rubric=RubricBreakdown(state_match=0.9),
+            reasoning="capture",
+        )
+
+
+class _FakeCard:
+    intent_definition = "用户在风险高亮态审查合同条款"
+    inclusion_criteria = "必须出现合同风险标记"
+    exclusion_criteria = "排除营销页"
+
+
+class _FakeComp:
+    canonical_name = "Vercel"
+
+    def __init__(self, competitor_type):
+        self.competitor_type = competitor_type
+
+
+class _FakeCell:
+    page_state = "风险高亮态"
+    journey_stage = "日常审查"
+    jtbd = "查看AI提取的条款与风险标记"
+
+
+class _FakeDB:
+    """Returns the competitor first, then the grid cell — the pipeline's order."""
+
+    def __init__(self, competitor_type):
+        self._rows = [_FakeComp(competitor_type), _FakeCell()]
+
+    def execute(self, _stmt):
+        row = self._rows.pop(0) if self._rows else None
+
+        class _Res:
+            def scalar_one_or_none(self_inner):
+                return row
+
+        return _Res()
+
+
+def _patch_context(monkeypatch, pattern="side-by-side diff review"):
+    monkeypatch.setattr(
+        pipeline_mod, "build_query_bundle",
+        lambda db, cell_id, competitor_id: QueryBundle(help_docs=["q1"]),
+    )
+    monkeypatch.setattr(
+        pipeline_mod, "get_mapping_card_by_cell", lambda db, cell_id: _FakeCard(),
+    )
+    monkeypatch.setattr(
+        pipeline_mod, "abstract_interaction_pattern",
+        lambda page_state, journey_stage, jtbd="": pattern,
+    )
+    # Keep these tests offline: live mode would resolve query strings through the
+    # real search API before the fake adapter ever runs.
+    monkeypatch.setattr(
+        pipeline_mod, "resolve_queries_to_urls",
+        lambda queries, max_total=0: list(queries),
+    )
+
+
+def test_cross_industry_pair_is_scored_on_interaction_pattern(monkeypatch):
+    _patch_context(monkeypatch)
+    scorer = _CaptureScorer()
+    run_probe_pipeline(
+        db=_FakeDB("cross_industry"), cell_id=uuid4(), competitor_id=uuid4(),
+        adapter=_FakeAdapter(1), scorer=scorer,
+    )
+    assert scorer.kwargs["intent_definition"].startswith("side-by-side diff review")
+    # Domain-language criteria would re-impose the filter the pattern removed.
+    assert scorer.kwargs["inclusion_criteria"] == ""
+    assert scorer.kwargs["exclusion_criteria"] == ""
+    assert scorer.kwargs["product_name"] == "Vercel"
+
+
+def test_direct_pair_keeps_domain_context(monkeypatch):
+    _patch_context(monkeypatch)
+    scorer = _CaptureScorer()
+    run_probe_pipeline(
+        db=_FakeDB("direct"), cell_id=uuid4(), competitor_id=uuid4(),
+        adapter=_FakeAdapter(1), scorer=scorer,
+    )
+    assert scorer.kwargs["intent_definition"] == _FakeCard.intent_definition
+    assert scorer.kwargs["inclusion_criteria"] == _FakeCard.inclusion_criteria
+    assert scorer.kwargs["exclusion_criteria"] == _FakeCard.exclusion_criteria
+
+
+def test_unavailable_abstraction_falls_back_to_domain_context(monkeypatch):
+    _patch_context(monkeypatch, pattern="")
+    scorer = _CaptureScorer()
+    run_probe_pipeline(
+        db=_FakeDB("indirect"), cell_id=uuid4(), competitor_id=uuid4(),
+        adapter=_FakeAdapter(1), scorer=scorer,
+    )
+    assert scorer.kwargs["intent_definition"] == _FakeCard.intent_definition
+    assert scorer.kwargs["inclusion_criteria"] == _FakeCard.inclusion_criteria

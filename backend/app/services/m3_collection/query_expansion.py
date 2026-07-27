@@ -23,6 +23,10 @@ from app.core.errors import AppError
 from app.models.m0_registry import CompetitorEntity, DomainLexicon
 from app.models.m1_grid import GridCell
 from app.schemas.m3 import QueryBundle
+from app.services.m3_collection.interaction_pattern import (
+    abstract_interaction_pattern,
+    needs_abstraction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +170,7 @@ def expand_terms_for_cell(
     competitor_names: list[str],
     official_phrase: str | None = None,
     competitor_domains: dict[str, tuple[str | None, str | None]] | None = None,
+    abstract_phrase: str | None = None,
 ) -> QueryBundle:
     """Build a bucketed QueryBundle for one grid cell. Pure -- no DB access.
 
@@ -185,11 +190,24 @@ def expand_terms_for_cell(
         official buckets are ``site:``-anchored to the competitor's OWN domain, so
         a search can only return that product's pages (not a rival's docs on the
         same feature). Missing domains degrade gracefully to an un-anchored query.
+      * ``abstract_phrase`` — for indirect / cross-industry competitors, a
+        domain-free interaction-pattern phrase that REPLACES the scenario seed in
+        every bucket. Vercel has no "contract risk", so a query carrying that noun
+        returns nothing; searching the interaction structure instead is the only
+        way those cells can ever be filled. Empty/None keeps the old behaviour.
     """
     # A single combined phrase used as a query seed across buckets.
     base_phrase = _base_phrase(page_state, journey_stage)
     # Official (help/demo) buckets query English pages; fall back to base_phrase.
     off_phrase = (official_phrase or base_phrase).strip()
+
+    # Non-direct competitors: the interaction pattern is already domain-free and
+    # English, so it replaces BOTH seeds — the industry nouns it dropped are
+    # exactly what made these queries return nothing.
+    abstract = (abstract_phrase or "").strip()
+    if abstract:
+        base_phrase = abstract
+        off_phrase = abstract
 
     competitors = _dedup(competitor_names)
     intents = _intent_terms()
@@ -314,7 +332,9 @@ def build_query_bundle(
     # so aliases must resolve too).
     competitor_names: list[str] = []
     competitor_domains: dict[str, tuple[str | None, str | None]] = {}
+    abstract_types_seen = False
     for comp in db.execute(comp_query).scalars().all():
+        abstract_types_seen = abstract_types_seen or needs_abstraction(comp.competitor_type)
         pair = (comp.help_center_domain, comp.official_domain)
         if comp.canonical_name:
             competitor_names.append(comp.canonical_name)
@@ -329,6 +349,16 @@ def build_query_bundle(
     # our benchmark set are English-first), so translate the scenario phrase once.
     official_phrase = _to_english(_base_phrase(cell.page_state, cell.journey_stage))
 
+    # Indirect / cross-industry competitors get the domain-free interaction
+    # pattern instead. Only when a SINGLE competitor was requested: a mixed
+    # all-competitors bundle would otherwise abstract away the domain terms that
+    # direct competitors need. The scorer reads the same cached phrase.
+    abstract_phrase = ""
+    if competitor_id is not None and abstract_types_seen:
+        abstract_phrase = abstract_interaction_pattern(
+            cell.page_state, cell.journey_stage, cell.jtbd or "",
+        )
+
     return expand_terms_for_cell(
         jtbd=cell.jtbd,
         journey_stage=cell.journey_stage,
@@ -337,4 +367,5 @@ def build_query_bundle(
         competitor_names=competitor_names,
         official_phrase=official_phrase,
         competitor_domains=competitor_domains,
+        abstract_phrase=abstract_phrase,
     )

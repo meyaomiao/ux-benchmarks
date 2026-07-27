@@ -29,6 +29,11 @@ from app.services.m3_collection.adapters.help_docs import HelpDocsAdapter
 from app.services.m3_collection.adapters.interactive_demo import InteractiveDemoAdapter
 from app.services.m3_collection.adapters.web_source import WebSourceAdapter
 from app.services.m3_collection.contracts import Adapter, Candidate, Score, Scorer, SourceType
+from app.services.m3_collection.interaction_pattern import (
+    abstract_interaction_pattern,
+    abstracted_intent,
+    needs_abstraction,
+)
 from app.services.m3_collection.query_expansion import build_query_bundle
 from app.services.m3_collection.scoring.relevance_scorer import RelevanceScorer
 from app.services.m3_collection.search_service import resolve_queries_to_urls
@@ -121,6 +126,7 @@ def run_probe_pipeline(
     # Best-effort: a missing db/entity just leaves product_name="" (gate inert),
     # matching how the rest of the pipeline degrades gracefully without context.
     product_name = ""
+    competitor_type = ""
     if db is not None:
         try:
             from sqlalchemy import select as _select
@@ -130,8 +136,38 @@ def run_probe_pipeline(
                 _select(CompetitorEntity).where(CompetitorEntity.id == competitor_id)
             ).scalar_one_or_none()
             product_name = (_comp.canonical_name if _comp else "") or ""
+            competitor_type = (_comp.competitor_type if _comp else "") or ""
         except Exception:  # noqa: BLE001 — context lookup must never kill a probe
             product_name = ""
+            competitor_type = ""
+
+    # Indirect / cross-industry competitors are scored on interaction STRUCTURE,
+    # not on our domain intent. build_query_bundle already searched the abstracted
+    # pattern for these pairs; if the rubric still demanded the industry intent
+    # (state_match 0.35 + product_match 0.20 = the whole 0.55 floor), every found
+    # artifact would score 0 and the empty cells would just become passed=0 cells.
+    # Same cached phrase on both sides, so query and rubric cannot drift.
+    if db is not None and needs_abstraction(competitor_type):
+        try:
+            from sqlalchemy import select as _select2
+
+            from app.models.m1_grid import GridCell
+            _cell = db.execute(
+                _select2(GridCell).where(GridCell.id == cell_id)
+            ).scalar_one_or_none()
+            if _cell is not None:
+                pattern = abstract_interaction_pattern(
+                    _cell.page_state, _cell.journey_stage, _cell.jtbd or "",
+                )
+                if pattern:
+                    intent = abstracted_intent(pattern, intent)
+                    # The criteria are written in domain language too, so keeping
+                    # them would re-impose the industry filter the pattern just
+                    # removed.
+                    inclusion = ""
+                    exclusion = ""
+        except Exception:  # noqa: BLE001 — abstraction must never kill a probe
+            pass
 
     # 4. Score each candidate (#19) and keep the passers.
     #    Text and image candidates are scored in their respective modes
