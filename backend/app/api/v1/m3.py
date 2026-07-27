@@ -8,7 +8,13 @@ from app.schemas.m3 import (
     QueueItemRead, QueueListResponse, PinRequest,
     QueryBundle, SourceRegistryListResponse,
 )
-from app.services.m3_collection.queue_service import enqueue_cell, list_queued, count_queued, stop_queued
+from app.services.m3_collection.queue_service import (
+    count_queued,
+    enqueue_cell,
+    list_queued,
+    reclaim_stuck_probing,
+    stop_queued,
+)
 from app.services.m3_collection.query_expansion import build_query_bundle
 from app.services.m3_collection import source_registry_service
 from app.services.m3_collection.state_machine import Trigger
@@ -192,6 +198,20 @@ async def stop_collection(
     """
     stopped = stop_queued(db, project_id)
     return {"stopped": stopped}
+
+
+@router.post("/reclaim-stuck")
+async def reclaim_stuck(
+    db: Session = Depends(get_db),
+    project_id: UUID = Depends(get_project_id),
+):
+    """Release pairs abandoned in PROBING by a crashed worker/request.
+
+    PROBING is only reachable from QUEUED, so an abandoned pair can never be
+    re-queued on its own and drops out of collection silently. Returns how many
+    pairs were released.
+    """
+    return {"reclaimed": reclaim_stuck_probing(db, project_id)}
 
 
 # --- Synchronous probe (#5) -------------------------------------------------

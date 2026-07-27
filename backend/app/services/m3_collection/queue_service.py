@@ -4,6 +4,7 @@ Sits on top of coverage_state_service + state_machine. Handles enqueueing
 (cell x competitor) pairs for probing, listing the current queue, and pulling
 the next pair to probe.
 """
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -15,6 +16,12 @@ from app.services.m3_collection.coverage_state_service import (
     transition_state,
 )
 from app.services.m3_collection.state_machine import CellState, Trigger
+
+# A probe that has been PROBING longer than this is treated as dead: the worker
+# or request that owned it is gone, and nothing else will ever move it on. Set
+# well above the slowest observed probe (~12 min serial) so a slow-but-alive run
+# is never reclaimed out from under itself.
+STUCK_PROBING_AFTER = timedelta(hours=2)
 
 
 def enqueue_cell(
@@ -138,3 +145,37 @@ def dequeue_next(db: Session) -> CoverageSnapshot | None:
         snapshot.competitor_id,
         CellState.PROBING,
     )
+
+
+def reclaim_stuck_probing(
+    db: Session,
+    project_id: UUID | None = None,
+    *,
+    older_than: timedelta = STUCK_PROBING_AFTER,
+) -> int:
+    """Release pairs abandoned in PROBING back to a terminal state. Returns count.
+
+    A crashed worker (or a killed request) leaves its pair in PROBING forever:
+    PROBING is only reachable from QUEUED, so the pair can never be re-queued and
+    silently drops out of collection. Anything stuck past `older_than` is moved to
+    REJECTED_EMPTY — a legal PROBING transition, and one that MANUAL_PIN can
+    re-queue from — so the pair becomes collectable again.
+    """
+    cutoff = datetime.now(timezone.utc) - older_than
+    q = db.query(CoverageSnapshot).filter(
+        CoverageSnapshot.status == CellState.PROBING,
+        CoverageSnapshot.last_probed_at < cutoff,
+    )
+    if project_id is not None:
+        q = q.filter(CoverageSnapshot.project_id == project_id)
+
+    stuck = q.all()
+    for snapshot in stuck:
+        transition_state(
+            db,
+            snapshot.cell_id,
+            snapshot.competitor_id,
+            CellState.REJECTED_EMPTY,
+            note="reclaim: probe abandoned in PROBING",
+        )
+    return len(stuck)
