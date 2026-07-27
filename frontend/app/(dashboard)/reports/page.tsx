@@ -98,7 +98,7 @@ function ReportViewer({ report, onClose, onDelete }: {
               &nbsp;·&nbsp;
               {FORMAT_LABELS[report.format_type as ReportFormat]?.label}
               &nbsp;·&nbsp;
-              {report.generated_by === "mock" ? "示例" : "Claude 生成"}
+              {report.generated_by === "mock" ? "示例" : "AI 生成"}
             </div>
             <div className="text-sm font-semibold text-gray-800">{report.title}</div>
           </div>

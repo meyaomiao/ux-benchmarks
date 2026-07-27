@@ -1,6 +1,6 @@
 """AI-powered scene grid generation from a product category.
 
-Calls Claude to produce JTBD tasks, journey stages and key (page, state) cells.
+Calls the GPT relay to produce JTBD tasks, journey stages and key (page, state) cells.
 Falls back to a deterministic mock when use_collection_mock=True or the API key
 is empty — same fallback pattern as the relevance scorer.
 """
@@ -10,11 +10,11 @@ import re
 
 from app.core.config import settings
 from app.schemas.m1 import GeneratedCell, GridGenerationRequest, GridGenerationResponse
+from app.utils import gpt_relay
 from app.utils.robust_json import extract_json
 
 logger = logging.getLogger(__name__)
 
-CLAUDE_MODEL = "claude-opus-4-8"
 
 _SYSTEM = (
     "你是 UX 场景分析专家，专门分析产品品类的用户体验设计标杆。"
@@ -100,32 +100,19 @@ def _prompt(req: GridGenerationRequest) -> str:
 
 
 def generate_grid(req: GridGenerationRequest) -> GridGenerationResponse:
-    """Generate a scene grid from a product category using Claude.
+    """Generate a scene grid from a product category via the GPT relay.
 
     Falls back to a deterministic mock when the API key is absent or mock mode
     is enabled — never raises, always returns a usable response.
     """
-    use_mock = settings.use_collection_mock or not settings.anthropic_api_key
+    use_mock = settings.use_collection_mock or not gpt_relay.relay_available()
     if use_mock:
         resp = _MOCK.model_copy(deep=True)
         resp.category = req.category
         return resp
 
     try:
-        import anthropic  # lazy import — only needed on the real path
-
-        kw: dict = {"api_key": settings.anthropic_api_key}
-        if settings.anthropic_base_url:
-            kw["base_url"] = settings.anthropic_base_url
-        client = anthropic.Anthropic(**kw)
-
-        msg = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=4096,
-            system=_SYSTEM,
-            messages=[{"role": "user", "content": _prompt(req)}],
-        )
-        raw = "".join(b.text for b in msg.content if b.type == "text")
+        raw = gpt_relay.chat(system=_SYSTEM, prompt=_prompt(req), max_tokens=4096)
         data = extract_json(raw)
 
         cells = [GeneratedCell(**c) for c in data.get("cells", [])]
@@ -135,7 +122,7 @@ def generate_grid(req: GridGenerationRequest) -> GridGenerationResponse:
             journey_stages=data.get("journey_stages", []),
             cells=cells,
             total=len(cells),
-            generated_by="claude",
+            generated_by="gpt",
         )
 
     except Exception as exc:

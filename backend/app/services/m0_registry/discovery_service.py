@@ -1,6 +1,6 @@
 """Competitor auto-discovery service (B).
 
-Given a product category and a list of already-known products, Claude suggests
+Given a product category and a list of already-known products, the model suggests
 three tiers of design benchmarks:
   - direct        (直接竞品): same category, same target users
   - indirect      (间接竞品): different category, overlapping jobs-to-be-done
@@ -18,11 +18,10 @@ import logging
 from dataclasses import dataclass
 
 from app.core.config import settings
-from app.utils.robust_json import extract_json
+from app.utils import gpt_relay
 
 logger = logging.getLogger(__name__)
 
-CLAUDE_MODEL = "claude-opus-4-8"
 
 _SYSTEM = (
     "你是 UX 竞品洞察专家，擅长识别哪些产品在特定场景下拥有值得学习的 UX 设计。"
@@ -92,14 +91,7 @@ _MOCK_SUGGESTIONS: list[dict] = [
 ]
 
 
-def _call_claude(category: str, known_products: list[str], tier: str | None = None) -> list[dict]:
-    import anthropic
-
-    kw: dict = {"api_key": settings.anthropic_api_key}
-    if settings.anthropic_base_url:
-        kw["base_url"] = settings.anthropic_base_url
-    client = anthropic.Anthropic(**kw)
-
+def _call_llm(category: str, known_products: list[str], tier: str | None = None) -> list[dict]:
     known = "、".join(known_products) if known_products else "（未指定）"
 
     # Per-tier spec so a single tier can be generated in isolation (parallel).
@@ -139,13 +131,7 @@ def _call_claude(category: str, known_products: list[str], tier: str | None = No
         )
         max_tokens = 8000
 
-    msg = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=max_tokens,
-        system=_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    raw = "".join(b.text for b in msg.content if b.type == "text")
+    raw = gpt_relay.chat(system=_SYSTEM, prompt=prompt, max_tokens=max_tokens)
     # The response is a JSON array, not an object — parse manually.
     import json, re
     arr_match = re.search(r"\[.*\]", raw, re.DOTALL)
@@ -165,15 +151,15 @@ def discover_competitors(
     otherwise all three tiers in one call. Falls back to seeded mock on failure.
     """
     known = known_products or []
-    use_mock = settings.use_collection_mock or not settings.anthropic_api_key
+    use_mock = settings.use_collection_mock or not gpt_relay.relay_available()
 
     if use_mock:
         raw = [s for s in _MOCK_SUGGESTIONS if not tier or s["tier"] == tier]
     else:
         try:
-            raw = _call_claude(category, known, tier)
+            raw = _call_llm(category, known, tier)
         except Exception as exc:
-            logger.warning("discover_competitors: Claude failed, using mock: %s", exc)
+            logger.warning("discover_competitors: relay failed, using mock: %s", exc)
             raw = [s for s in _MOCK_SUGGESTIONS if not tier or s["tier"] == tier]
 
     known_lower = {p.lower() for p in known}
@@ -187,7 +173,7 @@ def discover_competitors(
         if key in known_lower:
             continue   # skip already-registered products
         if key in seen:
-            continue   # dedup — Claude occasionally repeats a name
+            continue   # dedup — the model occasionally repeats a name
         seen.add(key)
         suggestions.append(DiscoverySuggestion(
             name=name,

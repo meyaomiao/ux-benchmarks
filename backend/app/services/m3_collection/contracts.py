@@ -82,7 +82,7 @@ class Score:
     evidence_type: EvidenceType
     rubric: RubricBreakdown
     reasoning: str = ""               # short human-readable justification
-    scored_by: str = "mock"           # "claude-vision" | "mock"
+    scored_by: str = "mock"           # "gpt:<model>" | "mock"
 
 
 # Default relevance floor (spec §6): below this, a candidate is dropped and

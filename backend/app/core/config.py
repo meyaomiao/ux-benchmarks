@@ -6,10 +6,6 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql://postgres:password@localhost:5432/ux_benchmarks"
     redis_url: str = "redis://localhost:6379/0"
-    anthropic_api_key: str = ""
-    # Optional override for a self-hosted / proxy Anthropic-compatible endpoint.
-    # Empty => the SDK default (api.anthropic.com). Set e.g. to a relay base URL.
-    anthropic_base_url: str = ""
     assets_dir: Path = Path("/app/assets")
     secret_key: str = "dev-secret"
     debug: bool = False
@@ -24,11 +20,10 @@ class Settings(BaseSettings):
     search_api_key: str = ""
     search_api_provider: str = "brave"
 
-    # GPT relay (OpenAI-compatible) for FAST parallel scoring of TEXT candidates.
-    # When set, text-mode relevance scoring uses this instead of Claude (much
-    # faster + cheaper, enabling parallel scoring of many candidates per probe).
-    # Both text AND image candidates use the GPT relay when a key is set (GPT
-    # 5.6 vision tested ≥ Claude Vision and faster). Empty => fall back to Claude.
+    # GPT relay (OpenAI-compatible) — the ONLY LLM path in the project. Every
+    # generator (M0 discovery, M1 grid, M2 mapping cards, M3 scoring/expansion,
+    # L3 insights, L5 reports) goes through it, so one key and one base URL
+    # control all of them. Empty key => every caller uses its deterministic mock.
     gpt_api_key: str = ""
     gpt_base_url: str = "https://deepkey.top/v1"
     gpt_scorer_model: str = "gpt-5.6-luna"       # text-mode scoring

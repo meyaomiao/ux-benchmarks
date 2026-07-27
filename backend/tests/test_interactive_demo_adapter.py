@@ -164,5 +164,5 @@ def test_scorer_uses_image_mode_for_demo_candidate(monkeypatch):
     )
     # Image mode: fidelity should be 0.8 (not the text-based heuristic)
     assert score.rubric.fidelity == pytest.approx(0.8, abs=0.01)
-    # And scored_by must be "mock" (not "claude-vision" — no real key in test)
+    # And scored_by must be "mock" (not "gpt:*" — no real key in test)
     assert score.scored_by == "mock"

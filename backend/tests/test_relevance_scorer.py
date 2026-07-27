@@ -35,7 +35,7 @@ def _force_mock(monkeypatch):
     from app.services.m3_collection.scoring import relevance_scorer
 
     monkeypatch.setattr(relevance_scorer.settings, "use_collection_mock", True)
-    monkeypatch.setattr(relevance_scorer.settings, "anthropic_api_key", "")
+    monkeypatch.setattr(relevance_scorer.settings, "gpt_api_key", "")
 
 
 def _candidate(

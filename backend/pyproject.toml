@@ -18,7 +18,6 @@ dependencies = [
     "trafilatura>=1.9",
     "pillow>=10.3",
     "imagehash>=4.3",
-    "anthropic>=0.28",
     "ddgs>=9.0",
     "python-multipart>=0.0.9",
     "python-dotenv>=1.0",

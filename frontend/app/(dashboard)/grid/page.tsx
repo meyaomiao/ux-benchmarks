@@ -66,7 +66,7 @@ export default function GridPage() {
   }
 
   // #2 Batch AI-generate mapping cards for every cell that doesn't have one yet.
-  // Runs sequentially (each call hits Claude) with a live progress counter.
+  // Runs sequentially (each call hits the relay) with a live progress counter.
   async function handleBatchGenerateCards() {
     const targets = cells.filter((c) => !cardCellIds.has(c.id));
     if (targets.length === 0) return;
