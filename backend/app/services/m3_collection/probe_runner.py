@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from sqlalchemy.orm import Session
 
 from app.services.m3_collection.asset_store import persist_passing
@@ -67,6 +68,15 @@ def run_probe(db: Session, cell_id: UUID, competitor_id: UUID) -> dict:
     # re-collected. On any failure we land on REJECTED_EMPTY and report it.
     try:
         result = run_probe_pipeline(db, cid, kid)
+    except SoftTimeLimitExceeded:
+        transition_state(
+            db,
+            str(cid),
+            str(kid),
+            CellState.REJECTED_EMPTY,
+            note="probe-now: soft time limit exceeded",
+        )
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("probe pipeline failed for %s/%s: %s", cid, kid, exc)
         snapshot = transition_state(

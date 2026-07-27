@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from billiard.exceptions import SoftTimeLimitExceeded
 
 from app.services.m3_collection import probe_runner
 from app.services.m3_collection.pipeline import ProbeResult
@@ -136,3 +137,22 @@ def test_pipeline_failure_still_lands_on_rejected_empty(monkeypatch):
 
     assert transitions == [CellState.PROBING, CellState.REJECTED_EMPTY]
     assert out["error"].startswith("ssl handshake failed")
+
+
+def test_soft_timeout_lands_on_rejected_empty_and_propagates(monkeypatch):
+    cell_id, competitor_id = uuid4(), uuid4()
+    transitions = _wire(
+        monkeypatch,
+        result=_empty_result(cell_id, competitor_id, 0),
+        live_evidence=True,
+    )
+
+    def timeout(*_args, **_kwargs):
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr(probe_runner, "run_probe_pipeline", timeout)
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        probe_runner.run_probe(object(), cell_id, competitor_id)
+
+    assert transitions == [CellState.PROBING, CellState.REJECTED_EMPTY]

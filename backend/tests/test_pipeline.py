@@ -6,6 +6,9 @@ database, using fake adapter/scorer that satisfy the contracts Protocols.
 """
 from uuid import uuid4
 
+import pytest
+from billiard.exceptions import SoftTimeLimitExceeded
+
 import app.services.m3_collection.pipeline as pipeline_mod
 from app.services.m3_collection.contracts import (
     Candidate,
@@ -104,6 +107,23 @@ def test_pipeline_passers_sorted_desc(monkeypatch):
     )
     scores = [s.score for _, s in result.passed]
     assert scores == sorted(scores, reverse=True)
+
+
+def test_pipeline_does_not_swallow_soft_timeout(monkeypatch):
+    _patch_db(monkeypatch)
+
+    class _TimedOutAdapter(_FakeAdapter):
+        def fetch(self, *_args, **_kwargs):
+            raise SoftTimeLimitExceeded()
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        run_probe_pipeline(
+            db=None,
+            cell_id=uuid4(),
+            competitor_id=uuid4(),
+            adapter=_TimedOutAdapter(0),
+            scorer=_FakeScorer(),
+        )
 
 
 class _CaptureScorer:

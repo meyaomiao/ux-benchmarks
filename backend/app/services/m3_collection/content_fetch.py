@@ -19,6 +19,8 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from billiard.exceptions import SoftTimeLimitExceeded
+
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = 12.0
@@ -47,6 +49,8 @@ def _http_get(url: str) -> Optional[str]:
             if "html" not in ctype and "text" not in ctype:
                 return None  # PDF / binary / json — not our job here
             return resp.text
+        except SoftTimeLimitExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001
             if attempt == 2:
                 logger.debug("content_fetch: GET failed %s: %s", url[:60], exc)
@@ -63,6 +67,8 @@ def _title_from_html(html: str) -> str:
         h1 = soup.find("h1")
         if h1:
             return h1.get_text(strip=True)[:200]
+    except SoftTimeLimitExceeded:
+        raise
     except Exception:  # noqa: BLE001
         pass
     return ""
@@ -77,6 +83,8 @@ def _bs4_fallback(html: str) -> str:
             tag.decompose()
         node = soup.find("main") or soup.find("article") or soup.body or soup
         return node.get_text(" ", strip=True)
+    except SoftTimeLimitExceeded:
+        raise
     except Exception:  # noqa: BLE001
         return ""
 
@@ -100,6 +108,8 @@ def fetch_main_text(url: str) -> Optional[tuple[str, str]]:
         )
         if extracted:
             text = extracted
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.debug("content_fetch: trafilatura failed %s: %s", url[:60], exc)
 
@@ -131,6 +141,8 @@ def fetch_many(urls: list[str], max_workers: int = 8) -> dict[str, tuple[str, st
             url = futures[fut]
             try:
                 got = fut.result()
+            except SoftTimeLimitExceeded:
+                raise
             except Exception as exc:  # noqa: BLE001
                 logger.debug("fetch_many: %s failed: %s", url[:60], exc)
                 got = None

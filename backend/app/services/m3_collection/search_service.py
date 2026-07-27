@@ -19,6 +19,8 @@ import logging
 import re
 from urllib.parse import urlparse
 
+from billiard.exceptions import SoftTimeLimitExceeded
+
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -226,6 +228,8 @@ def search_urls(query: str, n: int = _RESULTS_PER_QUERY) -> list[str]:
             if provider == "serpapi":
                 return _serpapi_search(query, n)
             return _brave_search(query, n)
+        except SoftTimeLimitExceeded:
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "search_service: %s failed for %r, trying DDG: %s",
@@ -235,6 +239,8 @@ def search_urls(query: str, n: int = _RESULTS_PER_QUERY) -> list[str]:
     # Default: DuckDuckGo, works with zero configuration.
     try:
         return _duckduckgo_search(query, n)
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:  # noqa: BLE001
         # Real mode: do NOT fabricate fake URLs. Return empty; caller reports it.
         logger.warning("search_service: DDG failed for %r: %s", query[:60], exc)

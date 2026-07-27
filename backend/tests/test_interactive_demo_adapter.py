@@ -175,14 +175,26 @@ def test_scorer_uses_image_mode_for_demo_candidate(monkeypatch):
 class _FakePage:
     """Minimal Playwright page double. Writes `png_bytes` on screenshot()."""
 
-    def __init__(self, png_bytes: int, viewport=None):
+    def __init__(self, png_bytes: int, viewport=None, *, fail_goto=False):
         self.png_bytes = png_bytes
         self.viewport = viewport
         self.full_page = None
         self.settled = False
+        self.fail_goto = fail_goto
+        self.default_timeout = None
+        self.navigation_timeout = None
+        self.closed = False
+
+    def set_default_timeout(self, timeout):
+        self.default_timeout = timeout
+
+    def set_default_navigation_timeout(self, timeout):
+        self.navigation_timeout = timeout
 
     def goto(self, url, **kw):
         self.url = url
+        if self.fail_goto:
+            raise RuntimeError("navigation failed")
 
     def query_selector(self, sel):
         return None
@@ -198,34 +210,40 @@ class _FakePage:
         Path(path).write_bytes(b"\x89PNG" + b"\x00" * self.png_bytes)
 
     def close(self):
-        pass
+        self.closed = True
 
 
 class _FakeBrowser:
-    def __init__(self, png_bytes):
+    def __init__(self, png_bytes, *, fail_goto=False):
         self.png_bytes = png_bytes
+        self.fail_goto = fail_goto
         self.pages: list[_FakePage] = []
+        self.launch_timeout = None
+        self.closed = False
 
     def new_page(self, viewport=None):
-        page = _FakePage(self.png_bytes, viewport=viewport)
+        page = _FakePage(
+            self.png_bytes, viewport=viewport, fail_goto=self.fail_goto
+        )
         self.pages.append(page)
         return page
 
     def close(self):
-        pass
+        self.closed = True
 
 
-def _install_fake_playwright(monkeypatch, png_bytes):
+def _install_fake_playwright(monkeypatch, png_bytes, *, fail_goto=False):
     """Register a fake `playwright.sync_api` so the lazy import inside
     capture_page_screenshots picks it up instead of a real browser."""
     import sys
     import types
 
-    browser = _FakeBrowser(png_bytes)
+    browser = _FakeBrowser(png_bytes, fail_goto=fail_goto)
 
     class _Chromium:
         @staticmethod
-        def launch(headless=True):
+        def launch(headless=True, timeout=None):
+            browser.launch_timeout = timeout
             return browser
 
     class _PW:
@@ -260,6 +278,9 @@ def test_capture_uses_desktop_viewport_and_full_page(monkeypatch, tmp_path):
     assert page.viewport == {"width": 1440, "height": 900}
     assert page.full_page is True
     assert page.settled is True
+    assert page.default_timeout == 5_000
+    assert page.navigation_timeout == 25_000
+    assert browser.launch_timeout == 15_000
 
 
 def test_capture_drops_near_blank_render(monkeypatch, tmp_path):
@@ -279,6 +300,17 @@ def test_capture_skips_non_urls(monkeypatch, tmp_path):
     _install_fake_playwright(monkeypatch, png_bytes=200_000)
 
     assert capture_page_screenshots(["site:adobe.com risk scan"]) == {}
+
+
+def test_capture_closes_page_and_browser_after_navigation_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "assets_dir", tmp_path)
+    browser = _install_fake_playwright(
+        monkeypatch, png_bytes=200_000, fail_goto=True
+    )
+
+    assert capture_page_screenshots(["https://example.com/hung"]) == {}
+    assert browser.pages[0].closed is True
+    assert browser.closed is True
 
 
 def test_dismiss_consent_never_raises():

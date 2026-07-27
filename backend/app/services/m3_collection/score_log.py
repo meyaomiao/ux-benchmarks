@@ -14,6 +14,7 @@ import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -75,6 +76,9 @@ def log_scored_candidates(
             )
         db.commit()
         return len(scored)
+    except SoftTimeLimitExceeded:
+        db.rollback()
+        raise
     except Exception as exc:  # noqa: BLE001 — diagnostics must not break a probe
         logger.warning(
             "probe score logging failed for %s/%s: %s", cell_id, competitor_id, exc

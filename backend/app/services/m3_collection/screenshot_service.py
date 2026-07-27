@@ -32,7 +32,12 @@ from app.services.m3_collection.asset_store import persist_candidate
 from app.services.m3_collection.contracts import (
     Candidate, EvidenceType, RubricBreakdown, Score, SourceType,
 )
-from app.services.m3_collection.adapters.interactive_demo import _make_png
+from app.services.m3_collection.adapters.interactive_demo import (
+    _BROWSER_LAUNCH_TIMEOUT_MS,
+    _close_playwright_resource,
+    _configure_page_timeouts,
+    _make_png,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -112,9 +117,13 @@ def _playwright_capture(
     text_content = ""
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        browser = pw.chromium.launch(
+            headless=True, timeout=_BROWSER_LAUNCH_TIMEOUT_MS
+        )
+        page = None
         try:
             page = browser.new_page(viewport=_VIEWPORT)
+            _configure_page_timeouts(page)
             page.goto(url, wait_until="domcontentloaded", timeout=_TIMEOUT_MS)
             # Give JS-heavy pages a moment to render.
             time.sleep(1.5)
@@ -134,9 +143,10 @@ def _playwright_capture(
                 pass
 
             page.screenshot(path=str(fpath), full_page=False)
-            page.close()
         finally:
-            browser.close()
+            if page is not None:
+                _close_playwright_resource(page, "page")
+            _close_playwright_resource(browser, "browser")
 
     return Candidate(
         cell_id=cell_id,
