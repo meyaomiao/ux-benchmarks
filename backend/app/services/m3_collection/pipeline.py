@@ -11,14 +11,14 @@ Multiple adapters (e.g. help-docs text + interactive demo screenshots) are run
 and their Candidates are merged before scoring. Text and image candidates are
 scored in their respective modes by the dual-mode scorer (#19/#45).
 
-Adapter(s) + scorer are injected (defaults: help docs, interactive demos,
-community and generic web, each with mock fallback via
+Adapter(s) + scorer are injected (defaults: agentic site, help docs,
+interactive demos, community and generic web, with offline mock fallbacks via
 settings.use_collection_mock) so this is testable offline with fakes. Pass
 `adapter=` (singular) for backward-compat with tests that inject a single fake.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from uuid import UUID
 
 from billiard.exceptions import SoftTimeLimitExceeded
@@ -26,12 +26,14 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.services.m2_mapping.mapping_service import get_mapping_card_by_cell
+from app.services.m3_collection.adapters.agentic_site import AgenticSiteAdapter
 from app.services.m3_collection.adapters.help_docs import HelpDocsAdapter
 from app.services.m3_collection.adapters.interactive_demo import (
     InteractiveDemoAdapter,
     capture_page_screenshots,
 )
 from app.services.m3_collection.adapters.web_source import WebSourceAdapter
+from app.services.m3_collection.agentic_site import canonical_url
 from app.services.m3_collection.content_fetch import (
     DEFAULT_RENDER_LIMIT_PER_ADAPTER,
     DEFAULT_RENDER_LIMIT_PER_PROBE,
@@ -59,7 +61,11 @@ from app.services.m3_collection.search_service import resolve_queries_to_urls
 
 # Official buckets must stay on the competitor's own domain — see
 # resolve_queries_to_urls(allow_unanchored_fallback=...).
-_OFFICIAL_BUCKETS = {SourceType.HELP_DOCS, SourceType.INTERACTIVE_DEMO}
+_OFFICIAL_BUCKETS = {
+    SourceType.HELP_DOCS,
+    SourceType.AGENTIC_SITE,
+    SourceType.INTERACTIVE_DEMO,
+}
 
 # Near-threshold rescore window. A text candidate scoring within this much of
 # the floor is one missing screenshot away from passing: text-only candidates
@@ -85,6 +91,7 @@ class ProbeResult:
     candidates_found: int
     scored: list[tuple[Candidate, Score]]  # every candidate + its score
     passed: list[tuple[Candidate, Score]]  # subset with score >= floor
+    agentic_stats: dict[str, int | str] = field(default_factory=dict)
 
     @property
     def has_passers(self) -> bool:
@@ -106,71 +113,26 @@ def run_probe_pipeline(
     Adapter resolution order:
       1. `adapters` list if provided
       2. `adapter` singular if provided (wrapped in a list)
-      3. default: help docs + interactive demo + community + generic web
+      3. default: agentic site + help docs + interactive demo + community + generic web
 
     Does NOT change cell state or persist anything — the caller (probe_cycle)
     owns state transitions. Missing mapping card => no scoring context, treated
     as zero passers.
     """
+    using_default_adapters = adapters is None and adapter is None
     if adapters is not None:
         _adapters: list[Adapter] = adapters
     elif adapter is not None:
         _adapters = [adapter]
     else:
-        # help docs + interactive demo + community(forums/Q&A) + generic(blogs/
-        # articles). The web adapters consume the community/generic buckets that
-        # were previously computed but never fetched — this is what surfaces the
-        # non-official-site evidence (forums, knowledge communities, reviews).
-        render_budget = RenderBudget(DEFAULT_RENDER_LIMIT_PER_PROBE)
-        _adapters = [
-            HelpDocsAdapter(
-                render_limit=DEFAULT_RENDER_LIMIT_PER_ADAPTER,
-                render_budget=render_budget,
-            ),
-            InteractiveDemoAdapter(),
-            WebSourceAdapter(
-                SourceType.COMMUNITY,
-                render_limit=DEFAULT_RENDER_LIMIT_PER_ADAPTER,
-                render_budget=render_budget,
-            ),
-            WebSourceAdapter(
-                SourceType.GENERIC,
-                render_limit=DEFAULT_RENDER_LIMIT_PER_ADAPTER,
-                render_budget=render_budget,
-            ),
-        ]
+        _adapters = []
 
     scorer = scorer or RelevanceScorer()
 
     # 1. What to search for (query expansion, #15).
     bundle = build_query_bundle(db, cell_id, competitor_id)
 
-    # 2. Run all adapters; route each to the right query bucket.
-    #    In live mode, resolve query strings to real URLs via the search service
-    #    before passing to adapters (which expect http(s) URLs in live mode).
-    all_candidates: list[Candidate] = []
-    for adp in _adapters:
-        queries = getattr(bundle, adp.source_type.value, []) or bundle.generic
-        if not settings.use_collection_mock:
-            # Resolve search-operator strings (e.g. "site:help.* setup") to URLs.
-            queries = resolve_queries_to_urls(
-                queries,
-                max_total=per_bucket_limit * 2,
-                allow_unanchored_fallback=adp.source_type not in _OFFICIAL_BUCKETS,
-            )
-        try:
-            found = adp.fetch(cell_id, competitor_id, queries, limit=per_bucket_limit)
-            all_candidates.extend(found)
-        except SoftTimeLimitExceeded:
-            raise
-        except Exception as exc:  # noqa: BLE001 — one failing adapter doesn't kill others
-            import logging
-            logging.getLogger(__name__).warning(
-                "adapter %s failed for cell %s: %s",
-                type(adp).__name__, cell_id, exc,
-            )
-
-    # 3. Scoring context from the mapping card (#11 / #2).
+    # 2. Scoring and exploration context from the mapping card and competitor.
     card = get_mapping_card_by_cell(db, cell_id)
     intent = card.intent_definition if card else ""
     inclusion = (card.inclusion_criteria if card else "") or ""
@@ -183,6 +145,8 @@ def run_probe_pipeline(
     # matching how the rest of the pipeline degrades gracefully without context.
     product_name = ""
     competitor_type = ""
+    official_domain = None
+    help_center_domain = None
     if db is not None:
         try:
             from sqlalchemy import select as _select
@@ -193,11 +157,17 @@ def run_probe_pipeline(
             ).scalar_one_or_none()
             product_name = (_comp.canonical_name if _comp else "") or ""
             competitor_type = (_comp.competitor_type if _comp else "") or ""
+            official_domain = getattr(_comp, "official_domain", None) if _comp else None
+            help_center_domain = (
+                getattr(_comp, "help_center_domain", None) if _comp else None
+            )
         except SoftTimeLimitExceeded:
             raise
         except Exception:  # noqa: BLE001 — context lookup must never kill a probe
             product_name = ""
             competitor_type = ""
+            official_domain = None
+            help_center_domain = None
 
     # Indirect / cross-industry competitors are scored on interaction STRUCTURE,
     # not on our domain intent. build_query_bundle already searched the abstracted
@@ -228,6 +198,74 @@ def run_probe_pipeline(
             raise
         except Exception:  # noqa: BLE001 — abstraction must never kill a probe
             pass
+
+    if using_default_adapters:
+        # Async probes are routed at the parent-task level to the dedicated
+        # browser queue. The agentic channel is live-only; deterministic mock
+        # runs retain the existing adapter set and never use browser or relay.
+        render_budget = RenderBudget(DEFAULT_RENDER_LIMIT_PER_PROBE)
+        if not settings.use_collection_mock:
+            _adapters.append(
+                AgenticSiteAdapter(
+                    competitor_name=product_name,
+                    intent=intent,
+                    official_domain=official_domain,
+                    help_center_domain=help_center_domain,
+                )
+            )
+        _adapters.extend(
+            [
+                HelpDocsAdapter(
+                    render_limit=DEFAULT_RENDER_LIMIT_PER_ADAPTER,
+                    render_budget=render_budget,
+                ),
+                InteractiveDemoAdapter(),
+                WebSourceAdapter(
+                    SourceType.COMMUNITY,
+                    render_limit=DEFAULT_RENDER_LIMIT_PER_ADAPTER,
+                    render_budget=render_budget,
+                ),
+                WebSourceAdapter(
+                    SourceType.GENERIC,
+                    render_limit=DEFAULT_RENDER_LIMIT_PER_ADAPTER,
+                    render_budget=render_budget,
+                ),
+            ]
+        )
+
+    # 3. Run all adapters, then collapse cross-channel URL duplicates before
+    # scoring so the same page consumes only one vision call and database row.
+    all_candidates: list[Candidate] = []
+    agentic_stats: dict[str, int | str] = {}
+    for adp in _adapters:
+        queries = []
+        if getattr(adp, "uses_search_queries", True):
+            queries = getattr(bundle, adp.source_type.value, []) or bundle.generic
+        try:
+            if not settings.use_collection_mock and getattr(
+                adp, "uses_search_queries", True
+            ):
+                queries = resolve_queries_to_urls(
+                    queries,
+                    max_total=per_bucket_limit * 2,
+                    allow_unanchored_fallback=adp.source_type not in _OFFICIAL_BUCKETS,
+                )
+            found = adp.fetch(cell_id, competitor_id, queries, limit=per_bucket_limit)
+            all_candidates.extend(found)
+        except SoftTimeLimitExceeded:
+            raise
+        except Exception as exc:  # noqa: BLE001 - one adapter must not kill the others
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "adapter %s failed for cell %s: %s",
+                type(adp).__name__, cell_id, exc,
+            )
+        finally:
+            if isinstance(adp, AgenticSiteAdapter):
+                agentic_stats = adp.last_stats
+
+    all_candidates = _dedupe_candidates(all_candidates)
 
     # 4. Score each candidate (#19) and keep the passers.
     #    Text and image candidates are scored in their respective modes
@@ -274,6 +312,26 @@ def run_probe_pipeline(
         candidates_found=len(all_candidates),
         scored=scored,
         passed=passed,
+        agentic_stats=agentic_stats,
+    )
+
+
+def _dedupe_candidates(candidates: list[Candidate]) -> list[Candidate]:
+    """Keep one candidate per normalized URL, preferring richer evidence."""
+    selected: dict[str, tuple[int, Candidate]] = {}
+    for index, candidate in enumerate(candidates):
+        key = canonical_url(candidate.source_url)
+        current = selected.get(key)
+        if current is None or _candidate_quality(candidate) > _candidate_quality(current[1]):
+            selected[key] = (current[0] if current else index, candidate)
+    return [candidate for _, candidate in sorted(selected.values(), key=lambda item: item[0])]
+
+
+def _candidate_quality(candidate: Candidate) -> tuple[bool, int, int]:
+    return (
+        bool(candidate.image_path),
+        len(candidate.text_content),
+        len(candidate.title) + len(candidate.snippet),
     )
 
 

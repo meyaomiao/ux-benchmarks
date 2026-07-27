@@ -25,10 +25,13 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
     task_routes={
-        "app.workers.tasks.probe_cycle.*": {"queue": "adapters"},
+        # A whole probe owns its browser work synchronously. Routing the parent
+        # task avoids nested Celery result waits while the dedicated worker's
+        # concurrency is the hard Chromium cap.
+        "app.workers.tasks.probe_cycle.*": {"queue": "browser"},
         "app.workers.tasks.run_job.*": {"queue": "adapters"},
         "app.workers.tasks.scoring.*": {"queue": "scoring"},
-        # health tasks → adapters queue (worker already consumes it via -Q adapters,scoring)
+        # Health tasks stay on the general worker.
         "app.workers.tasks.health.*": {"queue": "adapters"},
     },
     beat_schedule={

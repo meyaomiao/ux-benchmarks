@@ -118,4 +118,5 @@ def run_probe(db: Session, cell_id: UUID, competitor_id: UUID) -> dict:
         "candidates_found": result.candidates_found,
         "passed": len(result.passed),
         "persisted": persisted,
+        "agentic_stats": result.agentic_stats,
     }

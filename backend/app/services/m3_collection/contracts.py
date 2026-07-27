@@ -23,6 +23,7 @@ from uuid import UUID, uuid4
 
 class SourceType(StrEnum):
     HELP_DOCS = "help_docs"
+    AGENTIC_SITE = "agentic_site"
     INTERACTIVE_DEMO = "interactive_demo"
     VIDEO = "video"
     COMMUNITY = "community"
