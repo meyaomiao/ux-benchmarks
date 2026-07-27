@@ -116,5 +116,6 @@ class Scorer(Protocol):
         inclusion_criteria: str = "",
         exclusion_criteria: str = "",
         anchor_image_path: Optional[str] = None,
+        product_name: str = "",
     ) -> Score:
         ...

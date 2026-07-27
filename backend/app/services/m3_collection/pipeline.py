@@ -115,6 +115,24 @@ def run_probe_pipeline(
     inclusion = (card.inclusion_criteria if card else "") or ""
     exclusion = (card.exclusion_criteria if card else "") or ""
 
+    # Target product name — this is a competitor-scoped tool, so the scorer must
+    # know WHICH product a cell belongs to (a Notion cell rejects Adobe evidence).
+    # Without it, product_match degenerates to "is this a real product page?".
+    # Best-effort: a missing db/entity just leaves product_name="" (gate inert),
+    # matching how the rest of the pipeline degrades gracefully without context.
+    product_name = ""
+    if db is not None:
+        try:
+            from sqlalchemy import select as _select
+
+            from app.models.m0_registry import CompetitorEntity
+            _comp = db.execute(
+                _select(CompetitorEntity).where(CompetitorEntity.id == competitor_id)
+            ).scalar_one_or_none()
+            product_name = (_comp.canonical_name if _comp else "") or ""
+        except Exception:  # noqa: BLE001 — context lookup must never kill a probe
+            product_name = ""
+
     # 4. Score each candidate (#19) and keep the passers.
     #    Text and image candidates are scored in their respective modes
     #    by the dual-mode scorer (PR #45).
@@ -129,6 +147,7 @@ def run_probe_pipeline(
             intent_definition=intent,
             inclusion_criteria=inclusion,
             exclusion_criteria=exclusion,
+            product_name=product_name,
         )
 
     scored: list[tuple[Candidate, Score]] = []
