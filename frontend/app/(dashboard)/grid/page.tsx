@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { Suspense, useEffect, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -8,7 +8,7 @@ import type { GridCell, Competitor } from "@/lib/types";
 import { MappingCardEditor } from "@/components/grid/mapping-card-editor";
 import CellWizard from "@/components/grid/cell-wizard";
 
-export default function GridPage() {
+function GridPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const [cells, setCells] = useState<GridCell[]>([]);
@@ -329,5 +329,13 @@ export default function GridPage() {
         />
       )}
     </div>
+  );
+}
+
+export default function GridPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-gray-400 text-sm">加载中…</div>}>
+      <GridPageInner />
+    </Suspense>
   );
 }
