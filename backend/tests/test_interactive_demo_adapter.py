@@ -17,8 +17,10 @@ from app.core.config import settings
 from app.services.m3_collection.adapters.interactive_demo import (
     InteractiveDemoAdapter,
     _detect_platform,
+    _dismiss_consent,
     _looks_like_url,
     _make_png,
+    capture_page_screenshots,
     DEMO_PLATFORM_SIGNATURES,
 )
 from app.services.m3_collection.contracts import EvidenceType, SourceType
@@ -166,3 +168,125 @@ def test_scorer_uses_image_mode_for_demo_candidate(monkeypatch):
     assert score.rubric.fidelity == pytest.approx(0.8, abs=0.01)
     # And scored_by must be "mock" (not "gpt:*" — no real key in test)
     assert score.scored_by == "mock"
+
+
+# ── capture_page_screenshots (near-threshold rescore helper, #77) ───────────
+
+class _FakePage:
+    """Minimal Playwright page double. Writes `png_bytes` on screenshot()."""
+
+    def __init__(self, png_bytes: int, viewport=None):
+        self.png_bytes = png_bytes
+        self.viewport = viewport
+        self.full_page = None
+        self.settled = False
+
+    def goto(self, url, **kw):
+        self.url = url
+
+    def query_selector(self, sel):
+        return None
+
+    def wait_for_load_state(self, state, timeout=None):
+        self.settled = True
+
+    def wait_for_timeout(self, ms):
+        self.settled = True
+
+    def screenshot(self, path, full_page=False):
+        self.full_page = full_page
+        Path(path).write_bytes(b"\x89PNG" + b"\x00" * self.png_bytes)
+
+    def close(self):
+        pass
+
+
+class _FakeBrowser:
+    def __init__(self, png_bytes):
+        self.png_bytes = png_bytes
+        self.pages: list[_FakePage] = []
+
+    def new_page(self, viewport=None):
+        page = _FakePage(self.png_bytes, viewport=viewport)
+        self.pages.append(page)
+        return page
+
+    def close(self):
+        pass
+
+
+def _install_fake_playwright(monkeypatch, png_bytes):
+    """Register a fake `playwright.sync_api` so the lazy import inside
+    capture_page_screenshots picks it up instead of a real browser."""
+    import sys
+    import types
+
+    browser = _FakeBrowser(png_bytes)
+
+    class _Chromium:
+        @staticmethod
+        def launch(headless=True):
+            return browser
+
+    class _PW:
+        chromium = _Chromium()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    sync_api = types.ModuleType("playwright.sync_api")
+    sync_api.sync_playwright = lambda: _PW()
+    root = types.ModuleType("playwright")
+    root.sync_api = sync_api
+    monkeypatch.setitem(sys.modules, "playwright", root)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+    return browser
+
+
+def test_capture_uses_desktop_viewport_and_full_page(monkeypatch, tmp_path):
+    """A default 800x600 viewport shot of a doc page is nav chrome, not product
+    UI, and the UI we want usually sits below the fold — so the capture must use
+    a desktop viewport and shoot full_page."""
+    monkeypatch.setattr(settings, "assets_dir", tmp_path)
+    browser = _install_fake_playwright(monkeypatch, png_bytes=200_000)
+
+    out = capture_page_screenshots(["https://experienceleague.adobe.com/docs/x"])
+
+    assert len(out) == 1
+    page = browser.pages[0]
+    assert page.viewport == {"width": 1440, "height": 900}
+    assert page.full_page is True
+    assert page.settled is True
+
+
+def test_capture_drops_near_blank_render(monkeypatch, tmp_path):
+    """Regression (#77): a failed/JS-shell load still produces a tiny valid PNG.
+    Handing that to the vision scorer DROPPED product_match from 1.00 to 0.40 on
+    a real Adobe doc page. A near-blank shot must be discarded so the candidate's
+    text-mode score stands instead."""
+    monkeypatch.setattr(settings, "assets_dir", tmp_path)
+    _install_fake_playwright(monkeypatch, png_bytes=4_000)
+
+    assert capture_page_screenshots(["https://example.com/blank"]) == {}
+
+
+def test_capture_skips_non_urls(monkeypatch, tmp_path):
+    """Query-expansion strings (search operators) are not pages."""
+    monkeypatch.setattr(settings, "assets_dir", tmp_path)
+    _install_fake_playwright(monkeypatch, png_bytes=200_000)
+
+    assert capture_page_screenshots(["site:adobe.com risk scan"]) == {}
+
+
+def test_dismiss_consent_never_raises():
+    """Overlay handling is opportunistic: a page that blows up on every selector
+    must not abort the capture."""
+
+    class _Exploding:
+        def query_selector(self, sel):
+            raise RuntimeError("detached")
+
+    _dismiss_consent(_Exploding())  # must not raise

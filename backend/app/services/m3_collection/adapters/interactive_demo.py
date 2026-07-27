@@ -494,6 +494,39 @@ class InteractiveDemoAdapter:
 # change its source_type and subject it to the official-source product gate).
 # ---------------------------------------------------------------------------
 
+# A desktop viewport: the default 800x600 crops real product UI out of frame.
+_RESCORE_VIEWPORT = {"width": 1440, "height": 900}
+
+# Cap on waiting for the page to settle after DOM ready.
+_SETTLE_TIMEOUT_MS = 3_000
+
+# A PNG below this is a blank/error render, not a page. Observed: a failed load
+# shot 4 KB, a nav-bar-only shot 43 KB, a real content page 416 KB.
+_MIN_USEFUL_PNG_BYTES = 20_000
+
+# Cookie/consent overlays cover the whole viewport on EU-facing doc sites, so
+# without dismissing them every screenshot is a picture of a consent dialog.
+_CONSENT_SELECTORS = (
+    "#onetrust-accept-btn-handler",
+    "button#truste-consent-button",
+    "button[aria-label='Accept all']",
+    "button[aria-label='Accept All']",
+    "[data-testid='cookie-accept']",
+)
+
+
+def _dismiss_consent(page) -> None:
+    """Best-effort click on a cookie/consent accept button. Never raises."""
+    for sel in _CONSENT_SELECTORS:
+        try:
+            btn = page.query_selector(sel)
+            if btn is not None and btn.is_visible():
+                btn.click(timeout=1_000)
+                return
+        except Exception:  # noqa: BLE001 — overlay handling is opportunistic
+            continue
+
+
 def capture_page_screenshots(urls: list[str]) -> dict[str, str]:
     """Screenshot each URL's viewport. Returns {url: png_path} for successes.
 
@@ -523,13 +556,30 @@ def capture_page_screenshots(urls: list[str]) -> dict[str, str]:
             for url in urls:
                 if not _looks_like_url(url):
                     continue
-                page = browser.new_page()
+                page = browser.new_page(viewport=_RESCORE_VIEWPORT)
                 try:
                     page.goto(
                         url, wait_until="domcontentloaded", timeout=_GOTO_TIMEOUT_MS
                     )
+                    _dismiss_consent(page)
+                    # Let above-the-fold images/lazy blocks paint. networkidle
+                    # never settles on ad-heavy pages, so cap the wait instead.
+                    try:
+                        page.wait_for_load_state(
+                            "networkidle", timeout=_SETTLE_TIMEOUT_MS
+                        )
+                    except Exception:  # noqa: BLE001 — a busy page is fine
+                        page.wait_for_timeout(_SETTLE_TIMEOUT_MS)
                     fpath = shot_dir / f"{uuid4().hex[:8]}_rescore.png"
-                    page.screenshot(path=str(fpath), full_page=False)
+                    # full_page: the UI screenshot we want usually sits BELOW the
+                    # fold (the fold is nav + hero + cookie banner). A viewport
+                    # shot of a doc page shows chrome, not the product.
+                    page.screenshot(path=str(fpath), full_page=True)
+                    if fpath.stat().st_size < _MIN_USEFUL_PNG_BYTES:
+                        # Near-blank render (paywall, JS-only shell, load error).
+                        # Absent from the result → the text score stands.
+                        logger.info("rescore screenshot too empty for %s", url)
+                        continue
                     out[url] = str(fpath)
                 except Exception as exc:  # noqa: BLE001 — per-URL, keep going
                     logger.warning("rescore screenshot failed for %s: %s", url, exc)
