@@ -53,6 +53,27 @@ def confidence_score(independent_source_count: int, observed_fraction: float) ->
     return source_factor * obs
 
 
+def has_live_evidence(db: Session, cell_id: UUID, competitor_id: UUID) -> bool:
+    """True when the pair has at least one non-superseded, non-'claimed' Asset.
+
+    This is the same basis the confidence heuristic counts, so callers can ask
+    "does this pair actually hold evidence?" without duplicating the filter. Used
+    to stop a fruitless probe cycle from labelling a pair REJECTED_EMPTY while
+    evidence from an earlier cycle is still on file.
+    """
+    return (
+        db.query(Asset)
+        .filter(
+            Asset.cell_id == cell_id,
+            Asset.competitor_id == competitor_id,
+            Asset.is_superseded == False,  # noqa: E712 (SQLAlchemy needs ==)
+            Asset.evidence_type != CLAIMED_EVIDENCE_TYPE,
+        )
+        .first()
+        is not None
+    )
+
+
 def recompute_coverage(
     db: Session, cell_id: UUID, competitor_id: UUID
 ) -> CoverageSnapshot:
