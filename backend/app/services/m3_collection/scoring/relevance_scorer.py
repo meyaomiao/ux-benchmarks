@@ -37,6 +37,7 @@ from app.services.m3_collection.contracts import (
     RELEVANCE_FLOOR,
     RubricBreakdown,
     Score,
+    SourceType,
 )
 from app.utils.robust_json import extract_json
 
@@ -71,6 +72,30 @@ EXCLUSION_PENALTY = 0.25
 # the honest hierarchy screenshot(observed) > described-in-text, per
 # docs/theory-grounding.md (evidence directness), while not throwing away good docs.
 TEXT_ONLY_CEILING = 0.85
+
+# Product-match gate. This is a competitor-scoped tool: a Notion cell must hold
+# NOTION evidence, so an off-competitor doc that happens to show the same feature
+# is worthless there. The weighted combine alone can't enforce this (product_match
+# is only 0.20 of the total, so an off-competitor doc can still clear the floor on
+# state/directness). So when we know the target product name, an OFFICIAL-source
+# candidate whose product_match falls below this gate is hard-failed regardless of
+# overall score. Only enforced when a product name is supplied (mock/offline tests
+# pass none -> gate is inert, keeping them deterministic).
+PRODUCT_MATCH_GATE = 0.5
+
+# A product_match at/below this is the model stating the artifact is DEFINITELY a
+# different product - it never mentions the target at all (not a "Notion vs Coda"
+# comparison, which scores ~0.3-0.4). Such evidence is hard-failed for EVERY source
+# type, including community/generic, closing the generic-bucket hole (its queries
+# carry no competitor name, so off-product docs slip in).
+PRODUCT_MATCH_ZERO = 0.05
+
+# The 0.5 product-match gate HARD-FAILS these official source types - material that
+# must belong to the competitor itself. Community/generic sources are third-party
+# (forums, reviews, comparisons) and legitimately discuss the target product
+# alongside others, so they clear the 0.5 gate and are judged on overall score -
+# but they are STILL subject to the PRODUCT_MATCH_ZERO floor above.
+_OFFICIAL_SOURCES = {SourceType.HELP_DOCS, SourceType.INTERACTIVE_DEMO}
 
 # Tokens that signal a current UI generation rather than a stale one.
 RECENCY_TOKENS = {
@@ -193,6 +218,7 @@ class RelevanceScorer:
         inclusion_criteria: str = "",
         exclusion_criteria: str = "",
         anchor_image_path: Optional[str] = None,
+        product_name: str = "",
     ) -> Score:
         has_image = candidate.image_path is not None
         text = " ".join(
@@ -227,6 +253,7 @@ class RelevanceScorer:
                     exclusion_criteria=exclusion_criteria,
                     evidence_hint=candidate.evidence_type_hint,
                     image_path=img,
+                    product_name=product_name,
                 )
                 scored_by = f"gpt:{settings.gpt_vision_model if img else settings.gpt_scorer_model}"
             except Exception as exc:  # never crash the pipeline
@@ -248,6 +275,7 @@ class RelevanceScorer:
                     inclusion_criteria=inclusion_criteria,
                     exclusion_criteria=exclusion_criteria,
                     anchor_image_path=anchor_image_path,
+                    product_name=product_name,
                 )
                 scored_by = "claude-vision"
             except Exception as exc:  # never crash the pipeline
@@ -272,10 +300,40 @@ class RelevanceScorer:
         # procedural doc can still clear the floor.
         if not has_image:
             overall = min(overall, TEXT_ONLY_CEILING)
+
+        # Product-match gate (competitor-scoped tool): when we know the target
+        # product, evidence about a DIFFERENT product is hard-failed even if the
+        # feature matches - otherwise the 0.20-weighted product_match can't stop
+        # an off-competitor doc from clearing the floor on the other dimensions.
+        # The 0.5 gate applies only to OFFICIAL sources, which MUST be the
+        # competitor's own material; third-party community/generic sources
+        # legitimately read as comparisons and are judged on overall score, but
+        # still hard-fail at PRODUCT_MATCH_ZERO. The numeric score is never
+        # rewritten - only the verdict flips - so the audit trail stays intact.
+        passed = overall >= RELEVANCE_FLOOR
+        if product_name and rubric.product_match <= PRODUCT_MATCH_ZERO:
+            passed = False
+            if not reasoning.startswith("[off-product"):
+                reasoning = (
+                    f"[off-product gate: product_match={rubric.product_match:.2f}"
+                    f"~0, not {product_name} at all] " + reasoning
+                )
+        elif (
+            product_name
+            and candidate.source_type in _OFFICIAL_SOURCES
+            and rubric.product_match < PRODUCT_MATCH_GATE
+        ):
+            passed = False
+            if not reasoning.startswith("[off-product"):
+                reasoning = (
+                    f"[off-product gate: product_match={rubric.product_match:.2f}"
+                    f"<{PRODUCT_MATCH_GATE}, not {product_name}] " + reasoning
+                )
+
         return Score(
             candidate_id=candidate.candidate_id,
             score=overall,
-            passed=overall >= RELEVANCE_FLOOR,
+            passed=passed,
             # Map from the candidate hint — never upgrade claimed -> observed.
             evidence_type=candidate.evidence_type_hint,
             rubric=rubric,
@@ -296,6 +354,7 @@ class RelevanceScorer:
         exclusion_criteria: str,
         evidence_hint,
         image_path: Optional[str] = None,
+        product_name: str = "",
     ) -> tuple[RubricBreakdown, str]:
         """Scoring via the GPT relay (OpenAI-compatible). Handles BOTH modes:
 
@@ -313,10 +372,19 @@ class RelevanceScorer:
         has_image = bool(image_path)
         model = settings.gpt_vision_model if has_image else settings.gpt_scorer_model
 
+        # Name the target product explicitly so product_match is a real check
+        # ("is this Notion?") not a vague "is this a real product?" - the latter
+        # gave off-competitor docs a false 1.0.
+        product_line = (
+            f"- product_match: 是否确实是「{product_name}」这个产品的证据"
+            f"（他家产品即使功能相同也给 ≤0.2；无法判断给 0.4）\n"
+            if product_name else
+            "- product_match: 是否确实是目标产品（而非泛泛而谈或他家产品）\n"
+        )
         rubric_spec = (
             "按 5 个维度打分（每项 0-1 小数）：\n"
             "- state_match: 是否命中目标场景/页面状态\n"
-            "- product_match: 是否确实是目标产品（而非泛泛而谈或他家产品）\n"
+            f"{product_line}"
             "- version_recency: 内容新鲜度/是否当前版本（无法判断给 0.5）\n"
             "- evidence_directness: 直接展示操作/界面(高) vs 仅泛泛提及(低)\n"
             "- fidelity: 是否具体到可复现该场景（步骤/字段/交互/清晰度）\n\n"
@@ -324,7 +392,9 @@ class RelevanceScorer:
             '"version_recency":0.0,"evidence_directness":0.0,"fidelity":0.0,'
             '"reasoning":"一句话中文理由"}'
         )
+        target_line = f"目标产品：{product_name}\n" if product_name else ""
         ctx = (
+            f"{target_line}"
             f"目标场景意图：{intent_definition}\n"
             f"应包含：{inclusion_criteria or '（未指定）'}\n"
             f"应排除：{exclusion_criteria or '（未指定）'}\n"
@@ -385,6 +455,7 @@ class RelevanceScorer:
         inclusion_criteria: str,
         exclusion_criteria: str,
         anchor_image_path: Optional[str],
+        product_name: str = "",
     ) -> tuple[RubricBreakdown, str]:
         import anthropic  # lazy: only needed on the real path
 
@@ -436,14 +507,22 @@ class RelevanceScorer:
                 "(specific and detailed = high; generic = low)"
             )
 
+        product_match_line = (
+            f"- product_match: it is evidence of «{product_name}» specifically "
+            f"(a DIFFERENT product with the same feature scores <=0.2; unclear=0.4)"
+            if product_name else
+            "- product_match: it is the target product, not a competitor/generic"
+        )
+        target_line = f"TARGET PRODUCT: {product_name}\n" if product_name else ""
         instructions = (
             f"{mode_line}\n\n"
+            f"{target_line}"
             f"INTENT: {intent_definition}\n"
             f"INCLUSION CRITERIA: {inclusion_criteria or '(none)'}\n"
             f"EXCLUSION CRITERIA: {exclusion_criteria or '(none)'}\n\n"
             "Rubric dimensions:\n"
             f"{state_line}\n"
-            "- product_match: it is the target product, not a competitor/generic\n"
+            f"{product_match_line}\n"
             "- version_recency: current UI generation vs stale\n"
             "- evidence_directness: how direct the evidence is (shown/observed high, "
             "described moderate, merely claimed low)\n"
