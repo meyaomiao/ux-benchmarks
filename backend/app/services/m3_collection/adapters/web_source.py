@@ -17,8 +17,12 @@ import logging
 from uuid import UUID
 
 from app.core.config import settings
+from app.services.m3_collection.content_fetch import (
+    DEFAULT_RENDER_LIMIT_PER_ADAPTER,
+    RenderBudget,
+    fetch_candidate_pages,
+)
 from app.services.m3_collection.contracts import Candidate, EvidenceType, SourceType
-from app.services.m3_collection.content_fetch import fetch_many
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +42,16 @@ def _classify(text: str) -> EvidenceType:
 class WebSourceAdapter:
     """Fetches main-content evidence for one source_type bucket."""
 
-    def __init__(self, source_type: SourceType):
+    def __init__(
+        self,
+        source_type: SourceType,
+        *,
+        render_limit: int = DEFAULT_RENDER_LIMIT_PER_ADAPTER,
+        render_budget: RenderBudget | None = None,
+    ):
         self.source_type = source_type
+        self._render_limit = max(0, render_limit)
+        self._render_budget = render_budget
 
     def fetch(
         self,
@@ -55,17 +67,18 @@ class WebSourceAdapter:
 
         # `queries` are already resolved to URLs by the pipeline (it calls
         # resolve_queries_to_urls before invoking adapters in live mode).
-        urls = [u for u in queries if u.startswith("http")][: max(limit * 2, limit)]
-        fetched = fetch_many(urls)  # concurrent I/O, {url: (title, text)}
+        urls = list(dict.fromkeys(u for u in queries if u.startswith("http")))
+        urls = urls[: max(limit * 2, limit)]
+        render_limit = min(self._render_limit, limit, len(urls))
+        if self._render_budget is not None:
+            render_limit = self._render_budget.reserve(render_limit)
+        fetched = fetch_candidate_pages(urls, render_limit=render_limit)
 
         candidates: list[Candidate] = []
-        for url in urls:  # preserve search-rank order
+        for url, got in fetched.items():  # fetcher preserves search-rank order
             if len(candidates) >= limit:
                 break
-            got = fetched.get(url)
-            if not got:
-                continue  # SPA shell / binary / blocked — skip
-            title, text = got
+            title, text = got.title, got.text_content
             candidates.append(
                 Candidate(
                     cell_id=cell_id,
@@ -75,7 +88,7 @@ class WebSourceAdapter:
                     title=title,
                     snippet=text[:160],
                     text_content=text,
-                    image_path=None,
+                    image_path=got.image_path,
                     rights_status="third_party",
                     evidence_type_hint=_classify(text),
                 )

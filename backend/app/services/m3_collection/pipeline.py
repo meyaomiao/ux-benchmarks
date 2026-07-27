@@ -11,10 +11,10 @@ Multiple adapters (e.g. help-docs text + interactive demo screenshots) are run
 and their Candidates are merged before scoring. Text and image candidates are
 scored in their respective modes by the dual-mode scorer (#19/#45).
 
-Adapter(s) + scorer are injected (defaults: HelpDocsAdapter + InteractiveDemoAdapter,
-each with mock fallback via settings.use_collection_mock) so this is testable
-offline with fakes. Pass `adapter=` (singular) for backward-compat with tests
-that inject a single fake.
+Adapter(s) + scorer are injected (defaults: help docs, interactive demos,
+community and generic web, each with mock fallback via
+settings.use_collection_mock) so this is testable offline with fakes. Pass
+`adapter=` (singular) for backward-compat with tests that inject a single fake.
 """
 from __future__ import annotations
 
@@ -32,6 +32,11 @@ from app.services.m3_collection.adapters.interactive_demo import (
     capture_page_screenshots,
 )
 from app.services.m3_collection.adapters.web_source import WebSourceAdapter
+from app.services.m3_collection.content_fetch import (
+    DEFAULT_RENDER_LIMIT_PER_ADAPTER,
+    DEFAULT_RENDER_LIMIT_PER_PROBE,
+    RenderBudget,
+)
 from app.services.m3_collection.contracts import (
     RELEVANCE_FLOOR,
     Adapter,
@@ -101,7 +106,7 @@ def run_probe_pipeline(
     Adapter resolution order:
       1. `adapters` list if provided
       2. `adapter` singular if provided (wrapped in a list)
-      3. default: [HelpDocsAdapter, InteractiveDemoAdapter]
+      3. default: help docs + interactive demo + community + generic web
 
     Does NOT change cell state or persist anything — the caller (probe_cycle)
     owns state transitions. Missing mapping card => no scoring context, treated
@@ -116,11 +121,23 @@ def run_probe_pipeline(
         # articles). The web adapters consume the community/generic buckets that
         # were previously computed but never fetched — this is what surfaces the
         # non-official-site evidence (forums, knowledge communities, reviews).
+        render_budget = RenderBudget(DEFAULT_RENDER_LIMIT_PER_PROBE)
         _adapters = [
-            HelpDocsAdapter(),
+            HelpDocsAdapter(
+                render_limit=DEFAULT_RENDER_LIMIT_PER_ADAPTER,
+                render_budget=render_budget,
+            ),
             InteractiveDemoAdapter(),
-            WebSourceAdapter(SourceType.COMMUNITY),
-            WebSourceAdapter(SourceType.GENERIC),
+            WebSourceAdapter(
+                SourceType.COMMUNITY,
+                render_limit=DEFAULT_RENDER_LIMIT_PER_ADAPTER,
+                render_budget=render_budget,
+            ),
+            WebSourceAdapter(
+                SourceType.GENERIC,
+                render_limit=DEFAULT_RENDER_LIMIT_PER_ADAPTER,
+                render_budget=render_budget,
+            ),
         ]
 
     scorer = scorer or RelevanceScorer()

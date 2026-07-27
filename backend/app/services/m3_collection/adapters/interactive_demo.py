@@ -567,6 +567,16 @@ def _dismiss_consent(page) -> None:
             continue
 
 
+def _wait_for_page_settle(page) -> None:
+    """Give dynamic content a bounded chance to paint after DOM ready."""
+    try:
+        page.wait_for_load_state("networkidle", timeout=_SETTLE_TIMEOUT_MS)
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception:  # noqa: BLE001 — a busy page is still screenshotable
+        page.wait_for_timeout(_SETTLE_TIMEOUT_MS)
+
+
 def capture_page_screenshots(urls: list[str]) -> dict[str, str]:
     """Screenshot each URL's viewport. Returns {url: png_path} for successes.
 
@@ -607,14 +617,7 @@ def capture_page_screenshots(urls: list[str]) -> dict[str, str]:
                     _dismiss_consent(page)
                     # Let above-the-fold images/lazy blocks paint. networkidle
                     # never settles on ad-heavy pages, so cap the wait instead.
-                    try:
-                        page.wait_for_load_state(
-                            "networkidle", timeout=_SETTLE_TIMEOUT_MS
-                        )
-                    except SoftTimeLimitExceeded:
-                        raise
-                    except Exception:  # noqa: BLE001 — a busy page is fine
-                        page.wait_for_timeout(_SETTLE_TIMEOUT_MS)
+                    _wait_for_page_settle(page)
                     fpath = shot_dir / f"{uuid4().hex[:8]}_rescore.png"
                     # full_page: the UI screenshot we want usually sits BELOW the
                     # fold (the fold is nav + hero + cookie banner). A viewport
