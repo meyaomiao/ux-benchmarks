@@ -181,3 +181,43 @@ def test_help_docs_prefers_help_center_domain_single_site():
     for q in bundle.help_docs:
         assert "site:notion.so/help" in q
         assert " OR " not in q
+
+
+def test_abstract_phrase_replaces_scenario_in_every_bucket():
+    """Non-direct competitors search interaction structure, not domain nouns."""
+    pattern = "inline anomaly markers on a long scrollable document"
+    bundle = expand_terms_for_cell(
+        jtbd="查看AI提取的条款与风险标记",
+        journey_stage="日常审查",
+        page_state="风险高亮态",
+        lexicon_terms=["风险标记"],
+        competitor_names=["Vercel"],
+        official_phrase="Risk Highlight State Routine Review",
+        abstract_phrase=pattern,
+    )
+
+    buckets = (
+        bundle.help_docs + bundle.interactive_demo + bundle.video
+        + bundle.community + bundle.generic
+    )
+    assert buckets
+    assert all(pattern in query for query in buckets)
+    assert not any(
+        raw in query
+        for query in buckets
+        for raw in ("风险高亮态", "日常审查", "Risk Highlight State Routine Review")
+    )
+
+
+def test_empty_abstract_phrase_keeps_previous_behaviour():
+    kwargs = dict(
+        jtbd="查看AI提取的条款与风险标记",
+        journey_stage="日常审查",
+        page_state="风险高亮态",
+        lexicon_terms=["风险标记"],
+        competitor_names=["ThoughtRiver"],
+        official_phrase="Risk Highlight State Routine Review",
+    )
+    baseline = expand_terms_for_cell(**kwargs)
+    assert expand_terms_for_cell(**kwargs, abstract_phrase="") == baseline
+    assert expand_terms_for_cell(**kwargs, abstract_phrase=None) == baseline
