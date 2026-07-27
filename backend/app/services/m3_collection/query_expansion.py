@@ -237,15 +237,21 @@ def expand_terms_for_cell(
             help_docs.append(f"{off_phrase} {doc}")
 
     # interactive_demo: demo/tour phrasing, prefixed by competitor and anchored to
-    # the competitor's own marketing site when known.
+    # the competitor's own marketing site when known. Mirrors help_docs: a
+    # competitor-less (un-anchored) demo query searches the whole web, and the
+    # scorer fails every off-product hit at PRODUCT_MATCH_GATE anyway, so it only
+    # burns screenshot + vision budget. Emit it only when we have no competitor.
     interactive_demo: list[str] = []
-    for demo_kind in ("interactive demo", "product tour"):
-        interactive_demo.append(f"{off_phrase} {demo_kind}")
-        for name in competitors:
-            anchor = _site_anchor(competitor_domains, name, prefer="official")
-            interactive_demo.append(
-                f"{anchor} {name} {off_phrase} {demo_kind}".strip()
-            )
+    if competitors:
+        for demo_kind in ("interactive demo", "product tour"):
+            for name in competitors:
+                anchor = _site_anchor(competitor_domains, name, prefer="official")
+                interactive_demo.append(
+                    f"{anchor} {name} {off_phrase} {demo_kind}".strip()
+                )
+    else:
+        for demo_kind in ("interactive demo", "product tour"):
+            interactive_demo.append(f"{off_phrase} {demo_kind}")
 
     # video: video/walkthrough phrasing, optionally prefixed by competitor.
     video: list[str] = []
