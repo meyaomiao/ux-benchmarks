@@ -16,6 +16,7 @@ from app.services.m3_collection.agentic_site import (
     MAX_CANDIDATES,
     MAX_PAGES,
     MAX_STEPS,
+    MAX_TOTAL_SECONDS,
     UrlGuard,
     build_trusted_seeds,
     explore_competitor_site,
@@ -555,6 +556,10 @@ def test_fixed_exploration_budgets(monkeypatch, tmp_path, constant, value, actio
     }
     result, _, _ = _run(monkeypatch, tmp_path, specs, actions)
     assert result.stats.stop_reason == expected
+
+
+def test_production_exploration_budget_is_explicitly_bounded():
+    assert (MAX_STEPS, MAX_PAGES, MAX_CANDIDATES, MAX_TOTAL_SECONDS) == (9, 7, 4, 150)
 
 
 def test_bad_model_output_and_model_failure_stop_cleanly(monkeypatch, tmp_path):

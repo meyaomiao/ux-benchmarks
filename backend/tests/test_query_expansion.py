@@ -45,6 +45,29 @@ def test_generic_uses_competitor_and_translated_scenario():
     )
 
 
+def test_ui_bearing_queries_lead_search_budgets():
+    bundle = expand_terms_for_cell(
+        jtbd="review contract risks",
+        journey_stage="daily review",
+        page_state="risk scan results",
+        lexicon_terms=[],
+        competitor_names=["ThoughtRiver"],
+        official_phrase="contract risk scan results",
+        competitor_domains={"ThoughtRiver": (None, "thoughtriver.com")},
+    )
+
+    assert bundle.interactive_demo[:3] == [
+        "site:thoughtriver.com ThoughtRiver contract risk scan results interactive demo",
+        "site:thoughtriver.com ThoughtRiver contract risk scan results product walkthrough",
+        "site:thoughtriver.com ThoughtRiver contract risk scan results screenshot interface",
+    ]
+    assert [query.rsplit(" ", 1)[-1] for query in bundle.generic[:3]] == [
+        "demo",
+        "walkthrough",
+        "screenshot",
+    ]
+
+
 def test_generic_without_competitor_uses_translated_scenario():
     bundle = expand_terms_for_cell(
         jtbd="查看AI提取的条款与风险标记",

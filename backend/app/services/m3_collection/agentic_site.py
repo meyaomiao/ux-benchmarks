@@ -34,13 +34,13 @@ logger = logging.getLogger(__name__)
 
 # One exploration is deliberately small. The total-time guard is authoritative;
 # the other caps keep a fast site from consuming an unbounded number of actions.
-MAX_STEPS = 7
-MAX_PAGES = 6
-MAX_CANDIDATES = 3
+MAX_STEPS = 9
+MAX_PAGES = 7
+MAX_CANDIDATES = 4
 MAX_LINKS = 24
 MAX_LINKS_SCANNED = MAX_LINKS * 4
 MAX_NO_PROGRESS = 2
-MAX_TOTAL_SECONDS = 120
+MAX_TOTAL_SECONDS = 150
 ACTION_TIMEOUT_SECONDS = 20
 NAVIGATION_TIMEOUT_MS = 20_000
 

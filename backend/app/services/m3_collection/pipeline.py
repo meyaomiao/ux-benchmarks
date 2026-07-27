@@ -33,7 +33,10 @@ from app.services.m3_collection.adapters.interactive_demo import (
     capture_page_screenshots,
 )
 from app.services.m3_collection.adapters.web_source import WebSourceAdapter
-from app.services.m3_collection.agentic_site import canonical_url
+from app.services.m3_collection.agentic_site import (
+    MAX_CANDIDATES,
+    canonical_url,
+)
 from app.services.m3_collection.content_fetch import (
     DEFAULT_RENDER_LIMIT_PER_ADAPTER,
     DEFAULT_RENDER_LIMIT_PER_PROBE,
@@ -81,6 +84,31 @@ _RESCORE_MIN_PRODUCT_MATCH = PRODUCT_MATCH_GATE
 # Cap on how many candidates one probe will re-screenshot. Each costs a page
 # load plus a vision call, so this bounds the added latency per probe.
 _RESCORE_MAX = 4
+
+
+@dataclass(frozen=True)
+class SourceBudget:
+    max_searches: int
+    max_urls: int
+    max_candidates: int
+
+
+# UI-rich sources run first and receive explicit, non-transferable budgets. The
+# table is also the cost contract for one default probe: at most 10 web searches
+# and 40 candidates before cross-source URL deduplication.
+DEFAULT_SOURCE_BUDGETS = {
+    SourceType.AGENTIC_SITE: SourceBudget(0, 0, MAX_CANDIDATES),
+    SourceType.INTERACTIVE_DEMO: SourceBudget(3, 6, 6),
+    SourceType.HELP_DOCS: SourceBudget(2, 12, 12),
+    SourceType.COMMUNITY: SourceBudget(2, 8, 8),
+    SourceType.GENERIC: SourceBudget(3, 10, 10),
+}
+MAX_SEARCH_CALLS_PER_PROBE = sum(
+    budget.max_searches for budget in DEFAULT_SOURCE_BUDGETS.values()
+)
+MAX_INITIAL_CANDIDATES_PER_PROBE = sum(
+    budget.max_candidates for budget in DEFAULT_SOURCE_BUDGETS.values()
+)
 
 
 @dataclass
@@ -215,11 +243,11 @@ def run_probe_pipeline(
             )
         _adapters.extend(
             [
+                InteractiveDemoAdapter(),
                 HelpDocsAdapter(
                     render_limit=DEFAULT_RENDER_LIMIT_PER_ADAPTER,
                     render_budget=render_budget,
                 ),
-                InteractiveDemoAdapter(),
                 WebSourceAdapter(
                     SourceType.COMMUNITY,
                     render_limit=DEFAULT_RENDER_LIMIT_PER_ADAPTER,
@@ -238,6 +266,14 @@ def run_probe_pipeline(
     all_candidates: list[Candidate] = []
     agentic_stats: dict[str, int | str] = {}
     for adp in _adapters:
+        source_budget = (
+            DEFAULT_SOURCE_BUDGETS.get(adp.source_type)
+            if using_default_adapters
+            else None
+        )
+        candidate_limit = (
+            source_budget.max_candidates if source_budget else per_bucket_limit
+        )
         queries = []
         if getattr(adp, "uses_search_queries", True):
             queries = getattr(bundle, adp.source_type.value, []) or bundle.generic
@@ -247,10 +283,17 @@ def run_probe_pipeline(
             ):
                 queries = resolve_queries_to_urls(
                     queries,
-                    max_total=per_bucket_limit * 2,
+                    max_total=(
+                        source_budget.max_urls
+                        if source_budget
+                        else per_bucket_limit * 2
+                    ),
+                    max_searches=(
+                        source_budget.max_searches if source_budget else 3
+                    ),
                     allow_unanchored_fallback=adp.source_type not in _OFFICIAL_BUCKETS,
                 )
-            found = adp.fetch(cell_id, competitor_id, queries, limit=per_bucket_limit)
+            found = adp.fetch(cell_id, competitor_id, queries, limit=candidate_limit)
             all_candidates.extend(found)
         except SoftTimeLimitExceeded:
             raise
