@@ -75,9 +75,9 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    # Async probe tasks run here. Two processes cap their Chromium concurrency
+    # All probe tasks run here. Two processes cap their Chromium concurrency
     # at two per Compose deployment, independent of the -c 4 general worker.
-    # Synchronous /m3/probe-now bypasses Celery and is outside this worker cap.
+    # /m3/probe-now also dispatches here and waits for the queued task result.
     command: celery -A app.workers.celery_app worker --loglevel=info -Q browser -c 2 --hostname=browser@%h
     volumes:
       - ./backend:/app
