@@ -24,7 +24,10 @@ from app.services.m3_collection.content_fetch import (
     fetch_candidate_pages,
 )
 from app.services.m3_collection.contracts import SourceType
-from app.services.m3_collection.scoring.relevance_scorer import RelevanceScorer
+from app.services.m3_collection.scoring.relevance_scorer import (
+    LIVE_GPT_TIMEOUT_SECONDS,
+    RelevanceScorer,
+)
 
 
 class _FakeResponse:
@@ -337,7 +340,7 @@ def test_rendered_candidate_uses_existing_vision_relay_path(monkeypatch, tmp_pat
     payloads: list[dict] = []
 
     def fake_urlopen(request, timeout: int):
-        assert timeout == 60
+        assert timeout == LIVE_GPT_TIMEOUT_SECONDS
         payloads.append(json.loads(request.data))
         response = {
             "choices": [{

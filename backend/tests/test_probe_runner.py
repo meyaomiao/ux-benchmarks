@@ -172,13 +172,17 @@ def test_pipeline_failure_lands_on_rejected_empty_and_propagates(monkeypatch):
         telemetry.candidates_found = 5
         telemetry.scored_count = 2
         telemetry.passed_count = 1
+        telemetry.scored_candidates = [("cand-a", "score-a")]
         raise RuntimeError("ssl handshake failed")
 
     monkeypatch.setattr(probe_runner, "run_probe_pipeline", boom)
+    partial_logs = []
     monkeypatch.setattr(
         probe_runner,
         "log_scored_candidates",
-        lambda *_args, **_kwargs: pytest.fail("nothing was scored"),
+        lambda _db, _cid, _kid, rows, *, probe_cycle=None: partial_logs.append(
+            (rows, probe_cycle)
+        ),
     )
     run_logs = []
     monkeypatch.setattr(
@@ -196,6 +200,7 @@ def test_pipeline_failure_lands_on_rejected_empty_and_propagates(monkeypatch):
     assert run_logs[0]["scored_count"] == 2
     assert run_logs[0]["passed_count"] == 1
     assert run_logs[0]["error_type"] == "RuntimeError"
+    assert partial_logs == [([("cand-a", "score-a")], 2)]
 
 
 def test_soft_timeout_lands_on_rejected_empty_and_propagates(monkeypatch):
@@ -210,9 +215,18 @@ def test_soft_timeout_lands_on_rejected_empty_and_propagates(monkeypatch):
         telemetry = kwargs["telemetry"]
         telemetry.candidates_found = 4
         telemetry.scored_count = 1
+        telemetry.scored_candidates = [("cand-a", "score-a")]
         raise SoftTimeLimitExceeded()
 
     monkeypatch.setattr(probe_runner, "run_probe_pipeline", timeout)
+    partial_logs = []
+    monkeypatch.setattr(
+        probe_runner,
+        "log_scored_candidates",
+        lambda _db, _cid, _kid, rows, *, probe_cycle=None: partial_logs.append(
+            (rows, probe_cycle)
+        ),
+    )
     run_logs = []
     monkeypatch.setattr(
         probe_runner,
@@ -229,6 +243,7 @@ def test_soft_timeout_lands_on_rejected_empty_and_propagates(monkeypatch):
     assert run_logs[0]["scored_count"] == 1
     assert run_logs[0]["passed_count"] == 0
     assert run_logs[0]["error_type"] == "SoftTimeLimitExceeded"
+    assert partial_logs == [([("cand-a", "score-a")], 2)]
 
 
 def test_probe_result_exposes_minimal_agentic_stats(monkeypatch):

@@ -18,11 +18,11 @@ Two brains sit behind the same ``Scorer`` protocol:
     as JSON. Text-only sources (help docs today) are graded from their
     extracted text.
   * MOCK: a deterministic keyword-overlap scorer (``score_from_text``). It is
-    the default (``settings.use_collection_mock``) and the automatic fallback
-    whenever the API key is missing or the real call raises. This keeps the
-    whole chain runnable offline and makes the tests deterministic.
+    used only when ``settings.use_collection_mock`` is enabled, keeping offline
+    runs and tests deterministic without disguising live relay failures.
 
-The real path never crashes the pipeline: any error falls back to the mock.
+The real path fails closed: transport/configuration failures produce a rejected,
+explicitly labelled audit score and never become mock evidence.
 """
 from __future__ import annotations
 
@@ -35,9 +35,9 @@ from billiard.exceptions import SoftTimeLimitExceeded
 
 from app.core.config import settings
 from app.services.m3_collection.contracts import (
+    RELEVANCE_FLOOR,
     Candidate,
     EvidenceType,
-    RELEVANCE_FLOOR,
     RubricBreakdown,
     Score,
     SourceType,
@@ -75,6 +75,12 @@ EXCLUSION_PENALTY = 0.25
 # the honest hierarchy screenshot(observed) > described-in-text, per
 # docs/theory-grounding.md (evidence directness), while not throwing away good docs.
 TEXT_ONLY_CEILING = 0.85
+
+# The production relay normally answers in 5-15 seconds. A short per-request
+# ceiling prevents one degraded upstream call from consuming a full minute and
+# exhausting the 12-minute Celery task budget across a large candidate set.
+LIVE_GPT_TIMEOUT_SECONDS = 20
+GPT_ERROR_PREFIX = "gpt-error:"
 
 # Product-match gate. This is a competitor-scoped tool: a Notion cell must hold
 # NOTION evidence, so an off-competitor doc that happens to show the same feature
@@ -210,9 +216,12 @@ class RelevanceScorer:
     """Scores a Candidate against a cell's mapping-card intent + anchor.
 
     Implements the ``Scorer`` protocol from contracts. Uses the deterministic
-    mock in mock mode or when no API key is configured; otherwise calls the GPT
-    relay and falls back to the mock on any error.
+    mock only in explicit mock mode; live relay failures are rejected and
+    labelled for audit rather than converted into deterministic mock scores.
     """
+
+    def __init__(self, *, request_timeout_seconds: int = LIVE_GPT_TIMEOUT_SECONDS) -> None:
+        self.request_timeout_seconds = max(1, int(request_timeout_seconds))
 
     def score(
         self,
@@ -229,7 +238,7 @@ class RelevanceScorer:
             part for part in (candidate.title, candidate.snippet, candidate.text_content) if part
         )
 
-        use_mock = settings.use_collection_mock or not settings.gpt_api_key
+        use_mock = settings.use_collection_mock
         scored_by = "mock"
 
         if use_mock:
@@ -242,34 +251,42 @@ class RelevanceScorer:
                 has_image=has_image,
             )
         else:
-            # ALL candidates go to the GPT relay — text (luna) and images
-            # (vision). One relay for the whole project, which keeps parallel
-            # scoring fast. Falls back to the mock on failure.
+            # ALL live candidates go to the GPT relay — text and images. A live
+            # failure must remain visible and rejected; treating it as mock can
+            # manufacture false-positive evidence and confidence.
             img = (candidate.image_path or anchor_image_path) if has_image else None
-            try:
-                rubric, reasoning = self._score_with_gpt(
-                    text=text,
-                    intent_definition=intent_definition,
-                    inclusion_criteria=inclusion_criteria,
-                    exclusion_criteria=exclusion_criteria,
-                    evidence_hint=candidate.evidence_type_hint,
-                    image_path=img,
-                    product_name=product_name,
-                )
-                scored_by = f"gpt:{settings.gpt_vision_model if img else settings.gpt_scorer_model}"
-            except SoftTimeLimitExceeded:
-                raise
-            except Exception as exc:  # never crash the pipeline
+            model = settings.gpt_vision_model if img else settings.gpt_scorer_model
+            scored_by = f"{GPT_ERROR_PREFIX}{model}"
+            if not settings.gpt_api_key:
+                rubric = RubricBreakdown()
+                reasoning = "[gpt-error:MissingApiKey] live scoring failed closed"
                 logger.warning(
-                    "GPT relevance scoring failed for candidate %s, "
-                    "falling back to mock: %s",
-                    candidate.candidate_id, exc,
+                    "GPT relevance scoring unavailable for candidate %s: missing API key",
+                    candidate.candidate_id,
                 )
-                rubric, reasoning = score_from_text(
-                    text=text, intent=intent_definition,
-                    inclusion=inclusion_criteria, exclusion=exclusion_criteria,
-                    evidence_hint=candidate.evidence_type_hint, has_image=has_image,
-                )
+            else:
+                try:
+                    rubric, reasoning = self._score_with_gpt(
+                        text=text,
+                        intent_definition=intent_definition,
+                        inclusion_criteria=inclusion_criteria,
+                        exclusion_criteria=exclusion_criteria,
+                        evidence_hint=candidate.evidence_type_hint,
+                        image_path=img,
+                        product_name=product_name,
+                    )
+                    scored_by = f"gpt:{model}"
+                except SoftTimeLimitExceeded:
+                    raise
+                except Exception as exc:  # fail closed without killing the probe
+                    error_type = type(exc).__name__
+                    logger.warning(
+                        "GPT relevance scoring failed closed for candidate %s: %s",
+                        candidate.candidate_id,
+                        error_type,
+                    )
+                    rubric = RubricBreakdown()
+                    reasoning = f"[gpt-error:{error_type}] live scoring failed closed"
 
         overall = _combine(rubric)
         # Text-only sources are capped below what a screenshot could reach, so
@@ -411,7 +428,7 @@ class RelevanceScorer:
                 "Content-Type": "application/json",
             },
         )
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=self.request_timeout_seconds) as resp:
             payload = json.load(resp)
         raw = payload["choices"][0]["message"]["content"]
         data = _extract_json(raw)
