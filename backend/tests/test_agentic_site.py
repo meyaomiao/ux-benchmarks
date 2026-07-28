@@ -444,6 +444,10 @@ def test_ai_opens_observed_link_then_saves_dom_and_full_page_image(monkeypatch, 
     assert "目标竞品：Acme" in prompts[0]
     assert "目标交互状态：review workspace permissions" in prompts[0]
     assert "L0: Permissions" in prompts[0]
+    assert "save 只保存当前页，不会结束探索" in prompts[0]
+    assert f"剩余动作次数（含本次）：{MAX_STEPS}" in prompts[0]
+    assert f"可再打开页面数：{MAX_PAGES - 1}" in prompts[0]
+    assert f"可再保存候选数：{MAX_CANDIDATES}" in prompts[0]
     assert result.stats.stop_reason == "model_stop"
     assert browser.page.closed and browser.context.closed and browser.closed
 
@@ -541,7 +545,6 @@ def test_repeated_save_stops_for_no_progress(monkeypatch, tmp_path):
     [
         ("MAX_STEPS", 1, ['{"action":"save"}'], "step_budget"),
         ("MAX_CANDIDATES", 1, ['{"action":"save"}'], "candidate_budget"),
-        ("MAX_PAGES", 1, ['{"action":"open_link","link_id":"L0"}'], "page_budget"),
     ],
 )
 def test_fixed_exploration_budgets(monkeypatch, tmp_path, constant, value, actions, expected):
@@ -557,6 +560,81 @@ def test_fixed_exploration_budgets(monkeypatch, tmp_path, constant, value, actio
     }
     result, _, _ = _run(monkeypatch, tmp_path, specs, actions)
     assert result.stats.stop_reason == expected
+
+
+def test_last_allowed_page_can_be_saved_but_cannot_navigate(monkeypatch, tmp_path):
+    monkeypatch.setattr(agentic_site, "MAX_PAGES", 1)
+    specs = {
+        "https://example.com/": {
+            "text": "Rendered review comparison with highlighted changes",
+            "links": [{"href": "/next", "text": "Next"}],
+            "search_url": "https://example.com/search?q=review",
+        },
+        "https://example.com/next": {"text": "Next page"},
+    }
+
+    result, browser, prompts = _run(
+        monkeypatch,
+        tmp_path,
+        specs,
+        ['{"action":"save"}', '{"action":"stop"}'],
+    )
+
+    assert [page.source_url for page in result.pages] == ["https://example.com/"]
+    assert result.stats.pages_opened == 1
+    assert result.stats.stop_reason == "model_stop"
+    assert len(prompts) == 2
+    assert "可再打开页面数：0" in prompts[0]
+    assert "页面导航预算已耗尽，本次只能 save 或 stop" in prompts[0]
+    assert '{"action":"open_link"' not in prompts[0]
+    assert '{"action":"search"' not in prompts[0]
+    assert browser.page.url == "https://example.com/"
+
+
+def test_last_allowed_page_rejects_model_navigation(monkeypatch, tmp_path):
+    monkeypatch.setattr(agentic_site, "MAX_PAGES", 1)
+    specs = {
+        "https://example.com/": {
+            "links": [{"href": "/next", "text": "Next"}],
+        },
+        "https://example.com/next": {"text": "Next page"},
+    }
+
+    result, browser, _ = _run(
+        monkeypatch,
+        tmp_path,
+        specs,
+        ['{"action":"open_link","link_id":"L0"}'],
+    )
+
+    assert result.pages == ()
+    assert result.stats.pages_opened == 1
+    assert result.stats.stop_reason == "model_invalid"
+    assert browser.page.url == "https://example.com/"
+
+
+def test_last_action_rejects_navigation_without_a_followup_save_step(monkeypatch, tmp_path):
+    monkeypatch.setattr(agentic_site, "MAX_STEPS", 1)
+    specs = {
+        "https://example.com/": {
+            "links": [{"href": "/next", "text": "Next"}],
+        },
+        "https://example.com/next": {"text": "Next page"},
+    }
+
+    result, browser, prompts = _run(
+        monkeypatch,
+        tmp_path,
+        specs,
+        ['{"action":"open_link","link_id":"L0"}'],
+    )
+
+    assert result.pages == ()
+    assert result.stats.pages_opened == 1
+    assert result.stats.stop_reason == "model_invalid"
+    assert "动作预算只剩本次，不能再导航" in prompts[0]
+    assert '{"action":"open_link"' not in prompts[0]
+    assert browser.page.url == "https://example.com/"
 
 
 def test_production_exploration_budget_is_explicitly_bounded():
