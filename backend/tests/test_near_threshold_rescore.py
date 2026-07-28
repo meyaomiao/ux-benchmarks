@@ -5,6 +5,8 @@ that already reads as the target product and lands just under RELEVANCE_FLOOR is
 a missing screenshot away from passing. These tests pin the qualification rules
 and the audit trail, offline (no browser, no network).
 """
+import time
+from threading import Lock
 from uuid import uuid4
 
 import app.services.m3_collection.pipeline as pipeline_mod
@@ -37,6 +39,25 @@ class _OneCandidateAdapter:
                 source_type=self.source_type,
                 text_content="Adobe Acrobat AI Assistant analyses uploaded PDFs.",
             )
+        ]
+
+
+class _ManyCandidateAdapter:
+    source_type = SourceType.GENERIC
+
+    def __init__(self, count):
+        self._count = count
+
+    def fetch(self, cell_id, competitor_id, queries, *, limit=10):
+        return [
+            Candidate(
+                cell_id=cell_id,
+                competitor_id=competitor_id,
+                source_url=f"https://experienceleague.adobe.com/acrobat-ai/{index}",
+                source_type=self.source_type,
+                text_content=f"Adobe Acrobat AI Assistant workflow {index}.",
+            )
+            for index in range(self._count)
         ]
 
 
@@ -120,6 +141,52 @@ def test_near_miss_gets_rescored(monkeypatch):
     assert len(result.scored) == 2
     assert {s.scored_by for _, s in result.scored} == {"mock"}
     assert [s.passed for _, s in result.scored] == [False, True]
+
+
+def test_near_miss_rescoring_is_serial(monkeypatch):
+    urls = [
+        f"https://experienceleague.adobe.com/acrobat-ai/{index}"
+        for index in range(3)
+    ]
+    captured = _patch(
+        monkeypatch,
+        shots={url: f"/tmp/shot-{index}.png" for index, url in enumerate(urls)},
+    )
+
+    class _SingleFlightBandScorer(_BandScorer):
+        def __init__(self):
+            super().__init__(NEAR_MISS)
+            self.active_images = 0
+            self.max_active_images = 0
+            self.lock = Lock()
+
+        def score(self, candidate, **kwargs):
+            if not candidate.image_path:
+                return super().score(candidate, **kwargs)
+            with self.lock:
+                self.active_images += 1
+                self.max_active_images = max(
+                    self.max_active_images, self.active_images
+                )
+            try:
+                time.sleep(0.02)
+                return super().score(candidate, **kwargs)
+            finally:
+                with self.lock:
+                    self.active_images -= 1
+
+    scorer = _SingleFlightBandScorer()
+    result = run_probe_pipeline(
+        db=None,
+        cell_id=uuid4(),
+        competitor_id=uuid4(),
+        adapter=_ManyCandidateAdapter(3),
+        scorer=scorer,
+    )
+
+    assert captured == [urls]
+    assert scorer.max_active_images == 1
+    assert len(result.scored) == 6
 
 
 def test_far_miss_is_not_screenshotted(monkeypatch):
