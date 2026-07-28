@@ -138,30 +138,47 @@ def test_url_guard_rejects_google_and_bing_web_result_pages(url):
 
 
 def test_parse_action_accepts_only_observed_capabilities():
-    assert (
-        parse_action(
-            '{"action":"open_link","link_id":"L2"}',
-            valid_link_ids={"L2"},
-            search_available=False,
-        ).link_id
-        == "L2"
+    open_link = parse_action(
+        '{"save_current":true,"action":"open_link","link_id":"L2"}',
+        valid_link_ids={"L2"},
+        search_available=False,
     )
-    assert (
+    assert open_link.link_id == "L2"
+    assert open_link.save_current is True
+
+    search = parse_action(
+        '{"save_current":false,"action":"search","query":"workspace permissions"}',
+        valid_link_ids=set(),
+        search_available=True,
+    )
+    assert search.query == "workspace permissions"
+    assert search.save_current is False
+
+    legacy_save = parse_action(
+        '{"action":"save"}',
+        valid_link_ids=set(),
+        search_available=False,
+    )
+    assert legacy_save.action == "save"
+    assert legacy_save.save_current is True
+
+    legacy_stop = parse_action(
+        '{"action":"stop"}',
+        valid_link_ids=set(),
+        search_available=False,
+    )
+    assert legacy_stop.action == "stop"
+    assert legacy_stop.save_current is False
+
+
+@pytest.mark.parametrize("value", ['"yes"', "1", "null", "{}"])
+def test_parse_action_rejects_non_boolean_save_current(value):
+    with pytest.raises(ValueError, match="save_current must be a boolean"):
         parse_action(
-            '{"action":"search","query":"workspace permissions"}',
+            f'{{"save_current":{value},"action":"stop"}}',
             valid_link_ids=set(),
-            search_available=True,
-        ).query
-        == "workspace permissions"
-    )
-    assert (
-        parse_action('{"action":"save"}', valid_link_ids=set(), search_available=False).action
-        == "save"
-    )
-    assert (
-        parse_action('{"action":"stop"}', valid_link_ids=set(), search_available=False).action
-        == "stop"
-    )
+            search_available=False,
+        )
 
 
 @pytest.mark.parametrize(
@@ -199,7 +216,8 @@ def test_model_action_uses_existing_gpt_relay_and_vision_model(monkeypatch):
     assert result == '{"action":"stop"}'
     assert calls == [
         (
-            "你是受限的竞品站内浏览器控制器。严格遵守动作 JSON schema。",
+            "你是受限的竞品站内浏览器控制器。严格遵守动作 JSON schema，"
+            "每个动作都填写布尔 save_current。",
             "bounded browser prompt",
             {
                 "max_tokens": 160,
@@ -434,7 +452,10 @@ def test_ai_opens_observed_link_then_saves_dom_and_full_page_image(monkeypatch, 
         monkeypatch,
         tmp_path,
         specs,
-        ['{"action":"open_link","link_id":"L0"}', '{"action":"save"}', '{"action":"stop"}'],
+        [
+            '{"save_current":false,"action":"open_link","link_id":"L0"}',
+            '{"save_current":true,"action":"stop"}',
+        ],
     )
 
     assert [page.source_url for page in result.pages] == ["https://example.com/permissions"]
@@ -444,12 +465,37 @@ def test_ai_opens_observed_link_then_saves_dom_and_full_page_image(monkeypatch, 
     assert "目标竞品：Acme" in prompts[0]
     assert "目标交互状态：review workspace permissions" in prompts[0]
     assert "L0: Permissions" in prompts[0]
-    assert "save 只保存当前页，不会结束探索" in prompts[0]
+    assert "save_current 与下一步动作不互斥" in prompts[0]
     assert f"剩余动作次数（含本次）：{MAX_STEPS}" in prompts[0]
     assert f"可再打开页面数：{MAX_PAGES - 1}" in prompts[0]
     assert f"可再保存候选数：{MAX_CANDIDATES}" in prompts[0]
     assert result.stats.stop_reason == "model_stop"
     assert browser.page.closed and browser.context.closed and browser.closed
+
+
+def test_ai_saves_current_page_before_opening_next_link(monkeypatch, tmp_path):
+    specs = {
+        "https://example.com/": {
+            "text": "Rendered permission review with highlighted changes",
+            "links": [{"href": "/next", "text": "Next"}],
+        },
+        "https://example.com/next": {"text": "Next help page"},
+    }
+
+    result, browser, _ = _run(
+        monkeypatch,
+        tmp_path,
+        specs,
+        [
+            '{"save_current":true,"action":"open_link","link_id":"L0"}',
+            '{"save_current":false,"action":"stop"}',
+        ],
+    )
+
+    assert [page.source_url for page in result.pages] == ["https://example.com/"]
+    assert [entry["action"] for entry in result.trace] == ["save", "open_link", "stop"]
+    assert result.trace[0]["page_url"] == result.trace[1]["page_url"]
+    assert browser.page.url == "https://example.com/next"
 
 
 def test_identified_site_search_can_reach_and_save_same_domain_result(monkeypatch, tmp_path):
@@ -468,7 +514,10 @@ def test_identified_site_search_can_reach_and_save_same_domain_result(monkeypatc
         monkeypatch,
         tmp_path,
         specs,
-        ['{"action":"search","query":"roles"}', '{"action":"save"}', '{"action":"stop"}'],
+        [
+            '{"save_current":false,"action":"search","query":"roles"}',
+            '{"save_current":true,"action":"stop"}',
+        ],
     )
 
     assert result.pages[0].source_url == "https://example.com/search?q=roles"
@@ -492,7 +541,10 @@ def test_same_url_ajax_site_search_can_make_progress(monkeypatch, tmp_path):
         monkeypatch,
         tmp_path,
         specs,
-        ['{"action":"search","query":"roles"}', '{"action":"save"}', '{"action":"stop"}'],
+        [
+            '{"save_current":false,"action":"search","query":"roles"}',
+            '{"save_current":true,"action":"stop"}',
+        ],
     )
 
     assert [page.text_content for page in result.pages] == ["Roles and permission review results"]
@@ -543,8 +595,12 @@ def test_repeated_save_stops_for_no_progress(monkeypatch, tmp_path):
 @pytest.mark.parametrize(
     ("constant", "value", "actions", "expected"),
     [
-        ("MAX_STEPS", 1, ['{"action":"save"}'], "step_budget"),
-        ("MAX_CANDIDATES", 1, ['{"action":"save"}'], "candidate_budget"),
+        (
+            "MAX_CANDIDATES",
+            1,
+            ['{"save_current":true,"action":"stop"}'],
+            "candidate_budget",
+        ),
     ],
 )
 def test_fixed_exploration_budgets(monkeypatch, tmp_path, constant, value, actions, expected):
@@ -577,18 +633,33 @@ def test_last_allowed_page_can_be_saved_but_cannot_navigate(monkeypatch, tmp_pat
         monkeypatch,
         tmp_path,
         specs,
-        ['{"action":"save"}', '{"action":"stop"}'],
+        ['{"save_current":true,"action":"stop"}'],
     )
 
     assert [page.source_url for page in result.pages] == ["https://example.com/"]
     assert result.stats.pages_opened == 1
     assert result.stats.stop_reason == "model_stop"
-    assert len(prompts) == 2
+    assert len(prompts) == 1
     assert "可再打开页面数：0" in prompts[0]
-    assert "页面导航预算已耗尽，本次只能 save 或 stop" in prompts[0]
+    assert "页面导航预算已耗尽，本次 action 只能是 stop" in prompts[0]
     assert '{"action":"open_link"' not in prompts[0]
     assert '{"action":"search"' not in prompts[0]
     assert browser.page.url == "https://example.com/"
+
+
+def test_last_action_can_save_current_page_and_stop(monkeypatch, tmp_path):
+    monkeypatch.setattr(agentic_site, "MAX_STEPS", 1)
+
+    result, _, prompts = _run(
+        monkeypatch,
+        tmp_path,
+        {"https://example.com/": {"text": "Rendered review comparison"}},
+        ['{"save_current":true,"action":"stop"}'],
+    )
+
+    assert [page.source_url for page in result.pages] == ["https://example.com/"]
+    assert result.stats.stop_reason == "model_stop"
+    assert "动作预算只剩本次，不能再导航，本次 action 只能是 stop" in prompts[0]
 
 
 def test_last_allowed_page_rejects_model_navigation(monkeypatch, tmp_path):
