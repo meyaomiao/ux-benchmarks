@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models.m1_grid import GridCell
 from app.models.m3_probe_log import ProbeRunLog
+from app.services.m3_collection.contracts import Candidate, Score
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,10 @@ class ProbeTelemetry:
     scored_count: int = 0
     passed_count: int = 0
     rescore_render_attempts: int = 0
+    scored_candidates: list[tuple[Candidate, Score]] = field(
+        default_factory=list,
+        repr=False,
+    )
     finished_at: datetime | None = None
     duration_ms: int | None = None
     _started_monotonic: float = field(default_factory=time.monotonic, repr=False)

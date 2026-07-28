@@ -47,6 +47,7 @@ from app.services.m3_collection.contracts import (
     RELEVANCE_FLOOR,
     Adapter,
     Candidate,
+    RubricBreakdown,
     Score,
     Scorer,
     SourceType,
@@ -59,6 +60,7 @@ from app.services.m3_collection.interaction_pattern import (
 from app.services.m3_collection.probe_observability import ProbeTelemetry
 from app.services.m3_collection.query_expansion import build_query_bundle
 from app.services.m3_collection.scoring.relevance_scorer import (
+    GPT_ERROR_PREFIX,
     PRODUCT_MATCH_GATE,
     RelevanceScorer,
 )
@@ -86,6 +88,20 @@ _RESCORE_MIN_PRODUCT_MATCH = PRODUCT_MATCH_GATE
 # Cap on how many candidates one probe will re-screenshot. Each costs a page
 # load plus a vision call, so this bounds the added latency per probe.
 _RESCORE_MAX = 4
+
+# Live scoring is deliberately bounded below the Celery task's 720-second soft
+# limit. The cap includes Agentic retries and near-threshold image rescoring.
+MAX_LIVE_SCORING_CALLS_PER_PROBE = 18
+MAX_LIVE_SCORING_SECONDS = 300
+AGENTIC_LIVE_SCORE_ATTEMPTS = 2
+
+_LIVE_SCORING_SOURCE_PRIORITY = {
+    SourceType.AGENTIC_SITE: 0,
+    SourceType.INTERACTIVE_DEMO: 1,
+    SourceType.HELP_DOCS: 2,
+    SourceType.COMMUNITY: 3,
+    SourceType.GENERIC: 4,
+}
 
 
 @dataclass(frozen=True)
@@ -128,6 +144,25 @@ class ProbeResult:
         return len(self.passed) > 0
 
 
+def _live_scoring_priority(candidate: Candidate) -> tuple[int, int]:
+    return (
+        _LIVE_SCORING_SOURCE_PRIORITY.get(candidate.source_type, 99),
+        0 if candidate.image_path else 1,
+    )
+
+
+def _not_scored(candidate: Candidate, reason: str) -> Score:
+    return Score(
+        candidate_id=candidate.candidate_id,
+        score=0.0,
+        passed=False,
+        evidence_type=candidate.evidence_type_hint,
+        rubric=RubricBreakdown(),
+        reasoning=f"[not-scored:{reason}] live scoring budget exhausted",
+        scored_by=f"not-scored:{reason}",
+    )
+
+
 def run_probe_pipeline(
     db: Session,
     cell_id: UUID,
@@ -159,6 +194,9 @@ def run_probe_pipeline(
         _adapters = []
 
     scorer = scorer or RelevanceScorer()
+    bounded_live_scoring = (
+        isinstance(scorer, RelevanceScorer) and not settings.use_collection_mock
+    )
 
     # 1. What to search for (query expansion, #15).
     bundle = build_query_bundle(db, cell_id, competitor_id)
@@ -348,11 +386,28 @@ def run_probe_pipeline(
                 telemetry.candidates_found = len(_dedupe_candidates(all_candidates))
 
     all_candidates = _dedupe_candidates(all_candidates)
+    if bounded_live_scoring:
+        # Keep expensive live calls focused on evidence that can actually prove
+        # the UI state. Stable sorting preserves adapter/search rank within each
+        # source and image class.
+        all_candidates.sort(key=_live_scoring_priority)
 
     # 4. Score each candidate (#19) and keep the passers.
     #    Text and image candidates are scored in their respective modes
     #    by the dual-mode scorer (PR #45).
-    def _score_one(cand: Candidate) -> tuple[Candidate, Score]:
+    scoring_started = time.monotonic()
+    live_scoring_calls = 0
+
+    def _live_budget_available() -> bool:
+        return (
+            live_scoring_calls < MAX_LIVE_SCORING_CALLS_PER_PROBE
+            and time.monotonic() - scoring_started < MAX_LIVE_SCORING_SECONDS
+        )
+
+    def _invoke_scorer(cand: Candidate) -> Score:
+        nonlocal live_scoring_calls
+        if bounded_live_scoring:
+            live_scoring_calls += 1
         if telemetry is not None:
             telemetry.scoring_calls += 1
         score = scorer.score(
@@ -362,6 +417,28 @@ def run_probe_pipeline(
             exclusion_criteria=exclusion,
             product_name=product_name,
         )
+        if telemetry is not None:
+            telemetry.scored_candidates.append((cand, score))
+        return score
+
+    def _score_one(cand: Candidate) -> tuple[Candidate, Score]:
+        if bounded_live_scoring and not _live_budget_available():
+            score = _not_scored(cand, "budget")
+            if telemetry is not None:
+                telemetry.scored_candidates.append((cand, score))
+        else:
+            score = _invoke_scorer(cand)
+            attempts = 1
+            while (
+                bounded_live_scoring
+                and bool(settings.gpt_api_key)
+                and cand.source_type == SourceType.AGENTIC_SITE
+                and score.scored_by.startswith(GPT_ERROR_PREFIX)
+                and attempts < AGENTIC_LIVE_SCORE_ATTEMPTS
+                and _live_budget_available()
+            ):
+                score = _invoke_scorer(cand)
+                attempts += 1
         if telemetry is not None:
             telemetry.scored_count += 1
             if score.passed:

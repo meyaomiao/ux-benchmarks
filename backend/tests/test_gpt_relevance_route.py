@@ -40,3 +40,49 @@ def test_gpt_relay_is_the_only_real_scoring_path(monkeypatch):
 
     assert score.scored_by == "gpt:gpt-test"
     assert score.rubric.state_match == 0.9
+
+
+def test_live_scoring_failure_is_rejected_without_mock_fallback(monkeypatch):
+    monkeypatch.setattr(settings, "use_collection_mock", False)
+    monkeypatch.setattr(settings, "gpt_api_key", "test-gpt-key")
+    monkeypatch.setattr(settings, "gpt_scorer_model", "gpt-test")
+
+    def fail_gpt_score(_self, **_kwargs):
+        raise TimeoutError("relay stalled")
+
+    monkeypatch.setattr(RelevanceScorer, "_score_with_gpt", fail_gpt_score)
+    candidate = Candidate(
+        cell_id=uuid4(),
+        competitor_id=uuid4(),
+        source_url="https://example.com/help",
+        source_type=SourceType.HELP_DOCS,
+        text_content="真实评分失败时不得回退 mock。",
+        evidence_type_hint=EvidenceType.CLAIMED,
+    )
+
+    score = RelevanceScorer().score(candidate, intent_definition="中文目标场景")
+
+    assert score.scored_by == "gpt-error:gpt-test"
+    assert score.passed is False
+    assert score.score == 0.0
+    assert score.rubric == RubricBreakdown()
+    assert "TimeoutError" in score.reasoning
+
+
+def test_live_scoring_without_key_is_rejected_without_mock(monkeypatch):
+    monkeypatch.setattr(settings, "use_collection_mock", False)
+    monkeypatch.setattr(settings, "gpt_api_key", "")
+    monkeypatch.setattr(settings, "gpt_scorer_model", "gpt-test")
+    candidate = Candidate(
+        cell_id=uuid4(),
+        competitor_id=uuid4(),
+        source_url="https://example.com/help",
+        source_type=SourceType.HELP_DOCS,
+        text_content="缺少密钥时也不能生成 mock 证据。",
+    )
+
+    score = RelevanceScorer().score(candidate, intent_definition="中文目标场景")
+
+    assert score.scored_by == "gpt-error:gpt-test"
+    assert score.passed is False
+    assert "MissingApiKey" in score.reasoning

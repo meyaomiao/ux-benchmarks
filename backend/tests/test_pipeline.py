@@ -127,6 +127,207 @@ def test_pipeline_scores_candidates_serially(monkeypatch):
     assert scorer.max_active == 1
 
 
+def test_live_scoring_prioritizes_agentic_and_fails_closed_at_budget(monkeypatch):
+    _patch_db(monkeypatch)
+    monkeypatch.setattr(pipeline_mod.settings, "use_collection_mock", False)
+    monkeypatch.setattr(pipeline_mod.settings, "gpt_api_key", "test-key")
+    monkeypatch.setattr(pipeline_mod, "MAX_LIVE_SCORING_CALLS_PER_PROBE", 2)
+    monkeypatch.setattr(pipeline_mod, "MAX_LIVE_SCORING_SECONDS", 999)
+
+    cell_id, competitor_id = uuid4(), uuid4()
+
+    class _MixedAdapter:
+        source_type = SourceType.GENERIC
+        uses_search_queries = False
+
+        def fetch(self, *_args, **_kwargs):
+            return [
+                Candidate(
+                    cell_id=cell_id,
+                    competitor_id=competitor_id,
+                    source_url="https://example.com/generic",
+                    source_type=SourceType.GENERIC,
+                    text_content="generic",
+                ),
+                Candidate(
+                    cell_id=cell_id,
+                    competitor_id=competitor_id,
+                    source_url="https://example.com/help-image",
+                    source_type=SourceType.HELP_DOCS,
+                    text_content="help image",
+                    image_path="/tmp/help.png",
+                    evidence_type_hint=EvidenceType.OBSERVED,
+                ),
+                Candidate(
+                    cell_id=cell_id,
+                    competitor_id=competitor_id,
+                    source_url="https://example.com/agentic",
+                    source_type=SourceType.AGENTIC_SITE,
+                    text_content="agentic image",
+                    image_path="/tmp/agentic.png",
+                    evidence_type_hint=EvidenceType.OBSERVED,
+                ),
+                Candidate(
+                    cell_id=cell_id,
+                    competitor_id=competitor_id,
+                    source_url="https://example.com/community",
+                    source_type=SourceType.COMMUNITY,
+                    text_content="community",
+                ),
+            ]
+
+    scorer = pipeline_mod.RelevanceScorer()
+    called = []
+
+    def fake_score(candidate, **_kwargs):
+        called.append(candidate.source_type)
+        return Score(
+            candidate_id=candidate.candidate_id,
+            score=0.7,
+            passed=True,
+            evidence_type=candidate.evidence_type_hint,
+            rubric=RubricBreakdown(state_match=0.7),
+            reasoning="live",
+            scored_by="gpt:test",
+        )
+
+    monkeypatch.setattr(scorer, "score", fake_score)
+    telemetry = ProbeTelemetry()
+
+    result = run_probe_pipeline(
+        db=None,
+        cell_id=cell_id,
+        competitor_id=competitor_id,
+        adapter=_MixedAdapter(),
+        scorer=scorer,
+        telemetry=telemetry,
+    )
+
+    assert called == [SourceType.AGENTIC_SITE, SourceType.HELP_DOCS]
+    assert telemetry.scoring_calls == 2
+    assert telemetry.scored_count == 4
+    assert len(result.passed) == 2
+    assert [score.scored_by for _, score in result.scored[2:]] == [
+        "not-scored:budget",
+        "not-scored:budget",
+    ]
+    assert "mock" not in {score.scored_by for _, score in result.scored}
+
+
+def test_live_scoring_stops_when_time_budget_expires(monkeypatch):
+    _patch_db(monkeypatch)
+    monkeypatch.setattr(pipeline_mod.settings, "use_collection_mock", False)
+    monkeypatch.setattr(pipeline_mod.settings, "gpt_api_key", "test-key")
+    monkeypatch.setattr(pipeline_mod, "MAX_LIVE_SCORING_CALLS_PER_PROBE", 10)
+    monkeypatch.setattr(pipeline_mod, "MAX_LIVE_SCORING_SECONDS", 5)
+
+    class _LiveAdapter(_FakeAdapter):
+        uses_search_queries = False
+
+    ticks = iter([0.0, 0.0, 0.0, 6.0])
+    monkeypatch.setattr(pipeline_mod.time, "monotonic", lambda: next(ticks))
+    scorer = pipeline_mod.RelevanceScorer()
+    called = []
+
+    def fake_score(candidate, **_kwargs):
+        called.append(candidate.source_url)
+        return Score(
+            candidate_id=candidate.candidate_id,
+            score=0.7,
+            passed=True,
+            evidence_type=EvidenceType.CLAIMED,
+            rubric=RubricBreakdown(state_match=0.7),
+            scored_by="gpt:test",
+        )
+
+    monkeypatch.setattr(scorer, "score", fake_score)
+
+    result = run_probe_pipeline(
+        db=None,
+        cell_id=uuid4(),
+        competitor_id=uuid4(),
+        adapter=_LiveAdapter(2),
+        scorer=scorer,
+    )
+
+    assert called == ["https://help.example.com/0"]
+    assert [score.scored_by for _, score in result.scored] == [
+        "gpt:test",
+        "not-scored:budget",
+    ]
+
+
+def test_agentic_live_score_gets_one_bounded_retry(monkeypatch):
+    _patch_db(monkeypatch)
+    monkeypatch.setattr(pipeline_mod.settings, "use_collection_mock", False)
+    monkeypatch.setattr(pipeline_mod.settings, "gpt_api_key", "test-key")
+    cell_id, competitor_id = uuid4(), uuid4()
+
+    class _AgenticCandidateAdapter:
+        source_type = SourceType.AGENTIC_SITE
+        uses_search_queries = False
+
+        def fetch(self, *_args, **_kwargs):
+            return [
+                Candidate(
+                    cell_id=cell_id,
+                    competitor_id=competitor_id,
+                    source_url="https://example.com/agentic",
+                    source_type=SourceType.AGENTIC_SITE,
+                    image_path="/tmp/agentic.png",
+                    evidence_type_hint=EvidenceType.OBSERVED,
+                )
+            ]
+
+    scorer = pipeline_mod.RelevanceScorer()
+    calls = 0
+
+    def flaky_score(candidate, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return Score(
+                candidate_id=candidate.candidate_id,
+                score=0.0,
+                passed=False,
+                evidence_type=EvidenceType.OBSERVED,
+                rubric=RubricBreakdown(),
+                reasoning="timeout",
+                scored_by="gpt-error:test",
+            )
+        return Score(
+            candidate_id=candidate.candidate_id,
+            score=0.8,
+            passed=True,
+            evidence_type=EvidenceType.OBSERVED,
+            rubric=RubricBreakdown(state_match=0.8),
+            reasoning="retry succeeded",
+            scored_by="gpt:test",
+        )
+
+    monkeypatch.setattr(scorer, "score", flaky_score)
+    telemetry = ProbeTelemetry()
+
+    result = run_probe_pipeline(
+        db=None,
+        cell_id=cell_id,
+        competitor_id=competitor_id,
+        adapter=_AgenticCandidateAdapter(),
+        scorer=scorer,
+        telemetry=telemetry,
+    )
+
+    assert calls == 2
+    assert telemetry.scoring_calls == 2
+    assert [score.scored_by for _, score in telemetry.scored_candidates] == [
+        "gpt-error:test",
+        "gpt:test",
+    ]
+    assert len(result.scored) == 1
+    assert result.scored[0][1].scored_by == "gpt:test"
+    assert result.has_passers is True
+
+
 def test_pipeline_no_passers(monkeypatch):
     _patch_db(monkeypatch)
 

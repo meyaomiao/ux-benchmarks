@@ -78,6 +78,13 @@ def run_probe(db: Session, cell_id: UUID, competitor_id: UUID) -> dict:
             CellState.REJECTED_EMPTY,
             note="probe-cycle: soft time limit exceeded",
         )
+        log_scored_candidates(
+            db,
+            cid,
+            kid,
+            telemetry.scored_candidates,
+            probe_cycle=probing.probe_cycles,
+        )
         log_probe_run(
             db,
             cid,
@@ -98,6 +105,13 @@ def run_probe(db: Session, cell_id: UUID, competitor_id: UUID) -> dict:
             db, str(cid), str(kid), CellState.REJECTED_EMPTY,
             note=f"probe-cycle: pipeline error: {str(exc)[:120]}",
         )
+        log_scored_candidates(
+            db,
+            cid,
+            kid,
+            telemetry.scored_candidates,
+            probe_cycle=probing.probe_cycles,
+        )
         log_probe_run(
             db,
             cid,
@@ -114,7 +128,11 @@ def run_probe(db: Session, cell_id: UUID, competitor_id: UUID) -> dict:
         raise
 
     log_scored_candidates(
-        db, cid, kid, result.scored, probe_cycle=probing.probe_cycles
+        db,
+        cid,
+        kid,
+        telemetry.scored_candidates or result.scored,
+        probe_cycle=probing.probe_cycles,
     )
 
     if result.has_passers:
