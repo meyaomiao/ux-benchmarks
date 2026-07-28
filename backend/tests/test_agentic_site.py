@@ -171,6 +171,23 @@ def test_parse_action_accepts_only_observed_capabilities():
     assert legacy_stop.save_current is False
 
 
+def test_parse_action_accepts_llm_wrapped_json_without_relaxing_schema():
+    action = parse_action(
+        """模型判断如下：
+```json
+{"save_current":true,"action":"open_link","link_id":"L0",}
+```""",
+        valid_link_ids={"L0"},
+        search_available=False,
+    )
+
+    assert action == agentic_site.ExplorerAction(
+        action="open_link",
+        link_id="L0",
+        save_current=True,
+    )
+
+
 @pytest.mark.parametrize("value", ['"yes"', "1", "null", "{}"])
 def test_parse_action_rejects_non_boolean_save_current(value):
     with pytest.raises(ValueError, match="save_current must be a boolean"):
@@ -189,6 +206,7 @@ def test_parse_action_rejects_non_boolean_save_current(value):
         '{"action":"search","query":"https://evil.test"}',
         '{"action":"search","query":"roles"}',
         '{"action":"stop","url":"https://evil.test"}',
+        '```json\n{"action":"stop","url":"https://evil.test"}\n```',
         '{"action":"navigate","url":"https://evil.test"}',
         "not-json",
     ],
