@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
-import json
 import logging
 import socket
 import time
@@ -29,6 +28,7 @@ from app.services.m3_collection.adapters.interactive_demo import (
 )
 from app.services.m3_collection.content_fetch import _rendered_main_text
 from app.utils import gpt_relay
+from app.utils.robust_json import extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -281,10 +281,10 @@ def parse_action(
 ) -> ExplorerAction:
     """Parse the exact action schema; extra fields (especially URLs) fail closed."""
     try:
-        data = json.loads(raw)
-    except (TypeError, json.JSONDecodeError) as exc:
+        data = extract_json(raw)
+    except (AttributeError, TypeError, ValueError) as exc:
         raise ValueError("model action is not valid JSON") from exc
-    if not isinstance(data, dict) or not isinstance(data.get("action"), str):
+    if not isinstance(data.get("action"), str):
         raise ValueError("model action must be a JSON object")
 
     action = data["action"]
