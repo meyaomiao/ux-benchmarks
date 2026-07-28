@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import asdict, dataclass, field, replace
-from threading import Lock
 from uuid import UUID
 
 from billiard.exceptions import SoftTimeLimitExceeded
@@ -353,17 +352,9 @@ def run_probe_pipeline(
     # 4. Score each candidate (#19) and keep the passers.
     #    Text and image candidates are scored in their respective modes
     #    by the dual-mode scorer (PR #45).
-    # Score all candidates CONCURRENTLY — each score() is an LLM API call
-    # (I/O-bound), so a thread pool turns N serial calls into ceil(N/workers)
-    # rounds. This is the main lever cutting a probe from ~12min to ~1min.
-    from concurrent.futures import ThreadPoolExecutor
-
-    score_call_lock = Lock()
-
     def _score_one(cand: Candidate) -> tuple[Candidate, Score]:
         if telemetry is not None:
-            with score_call_lock:
-                telemetry.scoring_calls += 1
+            telemetry.scoring_calls += 1
         score = scorer.score(
             cand,
             intent_definition=intent,
@@ -372,21 +363,20 @@ def run_probe_pipeline(
             product_name=product_name,
         )
         if telemetry is not None:
-            with score_call_lock:
-                telemetry.scored_count += 1
-                if score.passed:
-                    telemetry.passed_count += 1
+            telemetry.scored_count += 1
+            if score.passed:
+                telemetry.passed_count += 1
         return cand, score
 
     scored: list[tuple[Candidate, Score]] = []
     passed: list[tuple[Candidate, Score]] = []
-    if all_candidates:
-        with ThreadPoolExecutor(max_workers=min(8, len(all_candidates))) as pool:
-            for cand, score in pool.map(_score_one, all_candidates):
-                scored.append((cand, score))
-                if score.passed:
-                    passed.append((cand, score))
+    for cand in all_candidates:
+        candidate, score = _score_one(cand)
+        scored.append((candidate, score))
+        if score.passed:
+            passed.append((candidate, score))
 
+    if all_candidates:
         # 4b. Near-threshold rescore: screenshot the right-product text
         # candidates that died just under the floor, then score them again in
         # image mode. Both scores stay in `scored`, so the diagnostics log keeps
@@ -479,9 +469,4 @@ def _rescore_near_threshold(
     if not with_images:
         return []
 
-    from concurrent.futures import ThreadPoolExecutor
-
-    out: list[tuple[Candidate, Score]] = []
-    with ThreadPoolExecutor(max_workers=min(8, len(with_images))) as pool:
-        out.extend(pool.map(score_one, with_images))
-    return out
+    return [score_one(candidate) for candidate in with_images]

@@ -4,7 +4,9 @@ The pipeline's two DB calls (build_query_bundle, get_mapping_card_by_cell) are
 monkeypatched so the fetch -> score -> keep-passers logic is exercised without a
 database, using fake adapter/scorer that satisfy the contracts Protocols.
 """
+import time
 from pathlib import Path
+from threading import Lock
 from uuid import uuid4
 
 import pytest
@@ -91,6 +93,38 @@ def test_pipeline_keeps_only_passers(monkeypatch):
     assert len(result.scored) == 4
     assert len(result.passed) == 2          # indexes 0 and 2
     assert result.has_passers is True
+
+
+def test_pipeline_scores_candidates_serially(monkeypatch):
+    _patch_db(monkeypatch)
+
+    class _SingleFlightScorer(_FakeScorer):
+        def __init__(self):
+            self.active = 0
+            self.max_active = 0
+            self.lock = Lock()
+
+        def score(self, candidate, **kwargs):
+            with self.lock:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            try:
+                time.sleep(0.02)
+                return super().score(candidate, **kwargs)
+            finally:
+                with self.lock:
+                    self.active -= 1
+
+    scorer = _SingleFlightScorer()
+    run_probe_pipeline(
+        db=None,
+        cell_id=uuid4(),
+        competitor_id=uuid4(),
+        adapter=_FakeAdapter(4),
+        scorer=scorer,
+    )
+
+    assert scorer.max_active == 1
 
 
 def test_pipeline_no_passers(monkeypatch):

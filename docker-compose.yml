@@ -75,10 +75,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    # All probe tasks run here. Two processes cap their Chromium concurrency
-    # at two per Compose deployment, independent of the -c 4 general worker.
+    # All probe tasks run here. One process keeps Chromium and the single-flight
+    # GPT relay isolated from the -c 4 general worker.
     # /m3/probe-now also dispatches here and waits for the queued task result.
-    command: celery -A app.workers.celery_app worker --loglevel=info -Q browser -c 2 --hostname=browser@%h
+    command: celery -A app.workers.celery_app worker --loglevel=info -Q browser -c 1 --hostname=browser@%h
     volumes:
       - ./backend:/app
       - assets_data:/app/assets
