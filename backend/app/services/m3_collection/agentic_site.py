@@ -380,24 +380,45 @@ def _action_prompt(
     competitor_name: str,
     intent: str,
     already_saved: bool,
+    remaining_steps: int,
+    remaining_pages: int,
+    remaining_candidates: int,
+    navigation_available: bool,
 ) -> str:
     links = (
         "\n".join(f"- {link.link_id}: {link.text} [{link.url}]" for link in observation.links)
         or "（无可用同域链接）"
     )
+    if navigation_available:
+        actions = (
+            '{"action":"open_link","link_id":"L0"}，或 '
+            '{"action":"search","query":"站内检索词"}，或 '
+            '{"action":"save"}，或 {"action":"stop"}。'
+        )
+        navigation_rule = ""
+    else:
+        actions = '{"action":"save"}，或 {"action":"stop"}。'
+        navigation_rule = (
+            "页面导航预算已耗尽，本次只能 save 或 stop。"
+            if remaining_pages <= 0
+            else "动作预算只剩本次，不能再导航，本次只能 save 或 stop。"
+        )
     return (
         f"目标竞品：{competitor_name}\n"
         f"目标交互状态：{intent}\n"
         f"当前页：{observation.title}\nURL：{observation.url}\n"
         f"当前页已保存：{'是' if already_saved else '否'}\n"
+        f"剩余动作次数（含本次）：{remaining_steps}\n"
+        f"可再打开页面数：{remaining_pages}\n"
+        f"可再保存候选数：{remaining_candidates}\n"
         f"正文摘要：{observation.text_content[:2600]}\n"
         f"站内搜索可用：{'是' if observation.search_available else '否'}\n"
         f"候选链接：\n{links}\n\n"
-        "只返回一个严格 JSON 动作，不要 Markdown："
-        '{"action":"open_link","link_id":"L0"}，或 '
-        '{"action":"search","query":"站内检索词"}，或 '
-        '{"action":"save"}，或 {"action":"stop"}。'
-        "只能选择上面的 link_id；不得输出 URL。只有页面真实展示目标状态时才 save。"
+        f"只返回一个严格 JSON 动作，不要 Markdown：{actions}"
+        "只能选择上面的 link_id；不得输出 URL。"
+        "只有页面真实展示目标状态时才 save；save 只保存当前页，不会结束探索。"
+        "如果当前页已经展示目标状态，必须在离开前先 save，不要把保存推迟到最后。"
+        f"{navigation_rule}"
     )
 
 
@@ -588,11 +609,18 @@ def explore_competitor_site(
                         stats.stop_reason = "no_progress"
                         break
 
+                    remaining_steps = MAX_STEPS - stats.steps
+                    remaining_pages = MAX_PAGES - stats.pages_opened
+                    navigation_available = remaining_pages > 0 and remaining_steps > 1
                     prompt = _action_prompt(
                         observation,
                         competitor_name=competitor_name,
                         intent=intent,
                         already_saved=canonical_url(observation.url) in saved_urls,
+                        remaining_steps=remaining_steps,
+                        remaining_pages=remaining_pages,
+                        remaining_candidates=MAX_CANDIDATES - len(saved_pages),
+                        navigation_available=navigation_available,
                     )
                     stats.steps += 1
                     stats.model_calls += 1
@@ -606,8 +634,14 @@ def explore_competitor_site(
                         )
                         action = parse_action(
                             raw_action,
-                            valid_link_ids={link.link_id for link in observation.links},
-                            search_available=observation.search_available,
+                            valid_link_ids=(
+                                {link.link_id for link in observation.links}
+                                if navigation_available
+                                else set()
+                            ),
+                            search_available=(
+                                observation.search_available and navigation_available
+                            ),
                         )
                     except SoftTimeLimitExceeded:
                         raise
