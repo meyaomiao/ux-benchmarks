@@ -86,6 +86,7 @@ class ExplorerAction:
     action: str
     link_id: str | None = None
     query: str | None = None
+    save_current: bool = False
 
 
 @dataclass(frozen=True)
@@ -287,15 +288,28 @@ def parse_action(
         raise ValueError("model action must be a JSON object")
 
     action = data["action"]
+    save_current = data.get("save_current", False)
+    if not isinstance(save_current, bool):
+        raise ValueError("save_current must be a boolean")
     if action == "open_link":
-        if set(data) != {"action", "link_id"}:
-            raise ValueError("open_link only accepts link_id")
+        if set(data) not in (
+            {"action", "link_id"},
+            {"action", "link_id", "save_current"},
+        ):
+            raise ValueError("open_link only accepts link_id and save_current")
         link_id = data.get("link_id")
         if not isinstance(link_id, str) or link_id not in valid_link_ids:
             raise ValueError("unknown link id")
-        return ExplorerAction(action=action, link_id=link_id)
+        return ExplorerAction(
+            action=action,
+            link_id=link_id,
+            save_current=save_current,
+        )
     if action == "search":
-        if set(data) != {"action", "query"} or not search_available:
+        if set(data) not in (
+            {"action", "query"},
+            {"action", "query", "save_current"},
+        ) or not search_available:
             raise ValueError("site search is unavailable or malformed")
         query = data.get("query")
         if (
@@ -307,11 +321,19 @@ def parse_action(
             or "\x00" in query
         ):
             raise ValueError("invalid site-search query")
-        return ExplorerAction(action=action, query=query.strip())
-    if action in {"save", "stop"}:
+        return ExplorerAction(
+            action=action,
+            query=query.strip(),
+            save_current=save_current,
+        )
+    if action == "save":
         if set(data) != {"action"}:
-            raise ValueError(f"{action} does not accept extra fields")
-        return ExplorerAction(action=action)
+            raise ValueError("save does not accept extra fields")
+        return ExplorerAction(action=action, save_current=True)
+    if action == "stop":
+        if set(data) not in ({"action"}, {"action", "save_current"}):
+            raise ValueError("stop only accepts save_current")
+        return ExplorerAction(action=action, save_current=save_current)
     raise ValueError("unknown model action")
 
 
@@ -391,17 +413,17 @@ def _action_prompt(
     )
     if navigation_available:
         actions = (
-            '{"action":"open_link","link_id":"L0"}，或 '
-            '{"action":"search","query":"站内检索词"}，或 '
-            '{"action":"save"}，或 {"action":"stop"}。'
+            '{"save_current":true,"action":"open_link","link_id":"L0"}，或 '
+            '{"save_current":false,"action":"search","query":"站内检索词"}，或 '
+            '{"save_current":true,"action":"stop"}。'
         )
         navigation_rule = ""
     else:
-        actions = '{"action":"save"}，或 {"action":"stop"}。'
+        actions = '{"save_current":true,"action":"stop"}。'
         navigation_rule = (
-            "页面导航预算已耗尽，本次只能 save 或 stop。"
+            "页面导航预算已耗尽，本次 action 只能是 stop。"
             if remaining_pages <= 0
-            else "动作预算只剩本次，不能再导航，本次只能 save 或 stop。"
+            else "动作预算只剩本次，不能再导航，本次 action 只能是 stop。"
         )
     return (
         f"目标竞品：{competitor_name}\n"
@@ -416,8 +438,9 @@ def _action_prompt(
         f"候选链接：\n{links}\n\n"
         f"只返回一个严格 JSON 动作，不要 Markdown：{actions}"
         "只能选择上面的 link_id；不得输出 URL。"
-        "只有页面真实展示目标状态时才 save；save 只保存当前页，不会结束探索。"
-        "如果当前页已经展示目标状态，必须在离开前先 save，不要把保存推迟到最后。"
+        "每次都必须独立判断当前页是否真实展示目标状态，并填写布尔 save_current。"
+        "save_current 与下一步动作不互斥；为 true 时系统会先保存当前页，再执行 action。"
+        "如果当前页已经保存则填写 false；不要因为还要继续浏览而跳过相关页面。"
         f"{navigation_rule}"
     )
 
@@ -431,7 +454,8 @@ def _request_action(
     if decision_fn is not None:
         return decision_fn(prompt)
     return gpt_relay.chat(
-        "你是受限的竞品站内浏览器控制器。严格遵守动作 JSON schema。",
+        "你是受限的竞品站内浏览器控制器。严格遵守动作 JSON schema，"
+        "每个动作都填写布尔 save_current。",
         prompt,
         max_tokens=160,
         timeout=timeout,
@@ -670,11 +694,41 @@ def explore_competitor_site(
                         stats.stop_reason = "model_failure"
                         break
 
+                    current = canonical_url(observation.url)
+                    saved_now = False
+                    if action.save_current and current not in saved_urls:
+                        captured = _save_page(observation, page)
+                        trace.append(
+                            {
+                                "step": stats.steps,
+                                "page_url": current,
+                                "action": "save",
+                                "saved": captured is not None,
+                            }
+                        )
+                        if captured is None:
+                            no_progress += 1
+                        else:
+                            saved_pages.append(captured)
+                            saved_urls.add(current)
+                            saved_now = True
+                            stats.candidates_saved = len(saved_pages)
+                            if len(saved_pages) >= MAX_CANDIDATES:
+                                stats.stop_reason = "candidate_budget"
+                                break
+
+                    if action.action == "save":
+                        if current in saved_urls and not saved_now:
+                            no_progress += 1
+                        if no_progress >= MAX_NO_PROGRESS:
+                            stats.stop_reason = "no_progress"
+                            break
+                        continue
                     if action.action == "stop":
                         trace.append(
                             {
                                 "step": stats.steps,
-                                "page_url": canonical_url(observation.url),
+                                "page_url": current,
                                 "action": "stop",
                             }
                         )
@@ -690,7 +744,7 @@ def explore_competitor_site(
                         trace.append(
                             {
                                 "step": stats.steps,
-                                "page_url": canonical_url(observation.url),
+                                "page_url": current,
                                 "action": "open_link",
                                 "target_url": canonical_url(selected.url),
                                 "link_text": selected.text,
@@ -707,7 +761,7 @@ def explore_competitor_site(
                             trace.append(
                                 {
                                     "step": stats.steps,
-                                    "page_url": canonical_url(observation.url),
+                                    "page_url": current,
                                     "action": "search",
                                     "query": action.query,
                                 }
@@ -741,31 +795,6 @@ def explore_competitor_site(
                             stats.stop_reason = "page_failure"
                             break
 
-                    current = canonical_url(observation.url)
-                    if current in saved_urls:
-                        no_progress += 1
-                        continue
-                    captured = _save_page(observation, page)
-                    trace.append(
-                        {
-                            "step": stats.steps,
-                            "page_url": current,
-                            "action": "save",
-                            "saved": captured is not None,
-                        }
-                    )
-                    if captured is None:
-                        no_progress += 1
-                        if no_progress >= MAX_NO_PROGRESS:
-                            stats.stop_reason = "no_progress"
-                            break
-                        continue
-                    saved_pages.append(captured)
-                    saved_urls.add(current)
-                    stats.candidates_saved = len(saved_pages)
-                    if len(saved_pages) >= MAX_CANDIDATES:
-                        stats.stop_reason = "candidate_budget"
-                        break
                 else:
                     stats.stop_reason = "step_budget"
             finally:
